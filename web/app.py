@@ -15,6 +15,8 @@ from typing import Any
 from flask import Flask, jsonify, request, send_from_directory
 
 from armazenamento import Banco
+from atividades import ErroBiblioteca, carregar_biblioteca
+from atividades import obra as etapa3
 from leitor_planilha import NATUREZAS, ErroLeitura, ler_planilha
 
 PASTA_ESTATICA = Path(__file__).parent / "static"
@@ -22,7 +24,9 @@ CAMPOS_OBRA_EDITAVEIS = ("nome", "prazo_valor", "prazo_unidade", "bdi", "desoner
 UNIDADES_PRAZO = ("dias", "semanas", "meses", "anos")
 
 
-def criar_app(caminho_banco: str | None = None, pasta_uploads: str | None = None) -> Flask:
+def criar_app(
+    caminho_banco: str | None = None, pasta_uploads: str | None = None, caminho_biblioteca: str | None = None
+) -> Flask:
     app = Flask(__name__, static_folder=None)
     app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
     banco = Banco(caminho_banco or os.environ.get("CRONOGRAMA_BANCO", "cronograma.sqlite3"))
@@ -42,6 +46,14 @@ def criar_app(caminho_banco: str | None = None, pasta_uploads: str | None = None
     @app.get("/")
     def index():
         return send_from_directory(PASTA_ESTATICA, "index.html")
+
+    @app.get("/ligacao")
+    def pagina_ligacao():
+        return send_from_directory(PASTA_ESTATICA, "ligacao.html")
+
+    @app.get("/sequencia")
+    def pagina_sequencia():
+        return send_from_directory(PASTA_ESTATICA, "sequencia.html")
 
     @app.get("/static/<path:arquivo>")
     def estatico(arquivo):
@@ -140,6 +152,59 @@ def criar_app(caminho_banco: str | None = None, pasta_uploads: str | None = None
     def carregar(obra_id):
         dados = banco.carregar_obra(obra_id)
         return jsonify(dados) if dados else _erro("Importação não encontrada.", 404)
+
+    # ------------------------------------------------------------------ etapa 3
+
+    def _biblioteca():
+        return carregar_biblioteca(caminho_biblioteca)
+
+    @app.errorhandler(ErroBiblioteca)
+    def erro_biblioteca(exc):
+        return jsonify({"erro": "A biblioteca de atividades tem erros. Corrija o Excel e recarregue a página.",
+                        "erros_biblioteca": exc.erros}), 422
+
+    @app.errorhandler(etapa3.ErroObra)
+    def erro_obra(exc):
+        return jsonify({"erro": str(exc)}), 400
+
+    @app.get("/api/biblioteca")
+    def biblioteca():
+        b = _biblioteca()
+        return jsonify({"caminho": b.caminho, "atividades": b.lista_atividades(), "qtd_regras": len(b.regras)})
+
+    @app.get("/api/obras/<int:obra_id>/ligacao")
+    def ligacao(obra_id):
+        return jsonify(etapa3.ligar_obra(banco, obra_id, _biblioteca()))
+
+    @app.post("/api/obras/<int:obra_id>/ligacao/refazer")
+    def refazer_ligacao(obra_id):
+        return jsonify(etapa3.ligar_obra(banco, obra_id, _biblioteca(), refazer=True))
+
+    @app.post("/api/obras/<int:obra_id>/ligacao")
+    def trocar_ligacao(obra_id):
+        dados = request.get_json(silent=True) or {}
+        if not dados.get("atividade") or not dados.get("servicos"):
+            return _erro("Informe a atividade e os serviços.")
+        return jsonify(etapa3.confirmar_ligacao(banco, obra_id, dados["servicos"], dados["atividade"], _biblioteca()))
+
+    @app.post("/api/obras/<int:obra_id>/rede")
+    def montar_rede(obra_id):
+        return jsonify(etapa3.montar_rede_obra(banco, obra_id, _biblioteca()))
+
+    @app.get("/api/obras/<int:obra_id>/rede")
+    def rede(obra_id):
+        return jsonify(etapa3.estado_rede(banco, obra_id))
+
+    @app.post("/api/obras/<int:obra_id>/rede/<codigo>")
+    def editar_rede(obra_id, codigo):
+        dados = request.get_json(silent=True) or {}
+        return jsonify(etapa3.editar_atividade_obra(
+            banco, obra_id, codigo,
+            tipo=dados.get("tipo"),
+            depende_de=dados.get("depende_de"),
+            salvar_na_biblioteca=bool(dados.get("salvar_biblioteca")),
+            caminho_biblioteca=caminho_biblioteca,
+        ))
 
     return app
 

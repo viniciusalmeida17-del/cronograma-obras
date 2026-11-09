@@ -1,7 +1,11 @@
-# Cronograma de obras — Etapa 2: leitor da planilha de licitação
+# Cronograma de obras
 
-Lê a planilha orçamentária da licitação (.xlsx), separa grupos e serviços, confere os totais
-e mostra tudo numa tela de conferência antes de salvar. Especificação: `ETAPA_2_LEITOR_DE_PLANILHA.md`.
+App local para montar o cronograma de uma obra a partir da planilha orçamentária da licitação.
+
+| Etapa | O que faz | Especificação |
+|---|---|---|
+| 2 | Lê a planilha (.xlsx), separa grupos e serviços, confere os totais, tela de conferência | `ETAPA_2_LEITOR_DE_PLANILHA.md` |
+| 3 | Liga cada serviço a uma atividade da biblioteca, guarda as escolhas do usuário, monta a rede de atividades da obra | `ETAPA_3_LIGAR_SERVICOS_ATIVIDADES.md` |
 
 ## Como rodar
 
@@ -12,7 +16,7 @@ python -m pytest           # testes automáticos
 ```
 
 Variáveis opcionais: `PORTA` (padrão 5000), `CRONOGRAMA_BANCO` (padrão `cronograma.sqlite3`),
-`ABRIR_NAVEGADOR=0` para não abrir o navegador sozinho.
+`CRONOGRAMA_BIBLIOTECA` (padrão `dados/biblioteca_atividades.xlsx`), `ABRIR_NAVEGADOR=0` para não abrir o navegador sozinho.
 
 ## Estrutura
 
@@ -25,7 +29,13 @@ Variáveis opcionais: `PORTA` (padrão 5000), `CRONOGRAMA_BANCO` (padrão `crono
 | `  natureza.py` | Natureza preliminar pela unidade: produção / tempo / transporte / taxa. |
 | `  validacao.py` | Total geral (tolerância R$ 1,00), total por grupo e quantidade × preço (R$ 0,05). |
 | `  leitor.py` | Escolha da aba, classificação das linhas, hierarquia pelo prefixo do item. |
-| `armazenamento/` | SQLite: tabelas `obras`, `grupos`, `servicos` (com `atividade_biblioteca`, `etapa_obra`, `local` vazios). |
+| `atividades/` | Etapa 3, também sem dependência da interface. |
+| `  biblioteca.py` | Lê e valida o Excel da biblioteca (códigos, `depende_de`, tipos, períodos, regras, ciclos); grava alterações com cópia de segurança em `dados/backup/`. |
+| `  reconhecimento.py` | Liga serviços às atividades: memória → regras (prioridade, profundidade do grupo) → `ambiguo` / `sem_regra`. |
+| `  rede.py` | Atividades da obra, herança de dependências (com soma das esperas), ligação à LIM-01, ordem topológica, edição por obra. |
+| `  obra.py` | Aplica a etapa 3 a uma obra gravada no banco (usado pela tela e pelos testes). |
+| `dados/` | `biblioteca_atividades.xlsx`: biblioteca padrão, editada pelo engenheiro no Excel. |
+| `armazenamento/` | SQLite: `obras`, `grupos`, `servicos` (com `atividade_biblioteca`, `status_ligacao`, `regra_usada`), `memoria_ligacoes`, `obra_atividades`, `obra_dependencias`. Bancos da etapa 2 são migrados sozinhos. |
 | `web/` | Servidor Flask local + tela de conferência (HTML/JS puro, sem build). |
 | `tests/` | Testes com o arquivo da Concorrência 2/2024 e o CSV esperado em `tests/dados/`. |
 
@@ -46,3 +56,18 @@ Variáveis opcionais: `PORTA` (padrão 5000), `CRONOGRAMA_BANCO` (padrão `crono
 3. Conferir/editar dados da obra (o **prazo é obrigatório**), ver o aviso verde/vermelho e a lista de alertas (clique na linha para ir até ela).
 4. Navegar na árvore de grupos, filtrar por grupo/natureza, buscar texto, corrigir a natureza de um serviço.
 5. "Confirmar e salvar importação" grava no SQLite.
+
+## Etapa 3 — ligação e rede
+
+1. Depois de salvar a importação, o link "Seguir para a ligação" abre a tela de ligação.
+2. O app liga cada serviço: primeiro pela **memória** (mesma base + código + nome do grupo imediato já confirmados antes),
+   depois pelas **regras** da biblioteca. O que não decidir fica em **Pendentes** (ambíguo: atividades empatadas primeiro; sem regra: lista completa com busca).
+3. "Trocar" muda a atividade de um serviço; se houver outros com o mesmo código no mesmo grupo, o app pergunta se aplica a eles também.
+   Toda escolha vira `confirmado` e vai para a memória.
+4. "Confirmar e seguir" monta a rede da obra:
+   - entram as atividades com serviço, as sem custo (tipo `aguardar` ou sem nenhuma regra na biblioteca: EST-03, HID-03, TES-01) se as atividades das quais dependem estiverem na obra, e sempre TES-01 e LIM-01;
+   - quem dependia de uma atividade que saiu herda as dependências dela, somando as esperas (`A+x` e `A → C+y` vira `C+(x+y)`);
+   - atividades sem sucessor passam a ser pré-requisito da LIM-01;
+   - indiretas ficam fora da sequência, com o período guardado.
+5. Na tela da sequência dá para mudar tipo e dependências só nesta obra (com checagem de ciclo), ou marcar
+   "salvar também na biblioteca padrão" (grava no Excel, com cópia de segurança antes).

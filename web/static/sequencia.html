@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sequência da Obra</title>
+  <link rel="stylesheet" href="/static/estilo.css">
+</head>
+<body>
+<header class="topo">
+  <h1><a href="/" class="link-topo">Cronograma de obras</a></h1>
+  <span class="etapa">Etapa 3 · Rede de atividades da obra</span>
+</header>
+
+<main>
+  <section id="erro-biblioteca" class="cartao alerta-erro" hidden></section>
+  <p id="msg-geral" class="mensagem"></p>
+
+  <section id="tela" hidden>
+    <div class="cartao">
+      <h2 id="nome-obra"></h2>
+      <div class="numeros" id="numeros"></div>
+      <div class="acoes-linha">
+        <a id="link-ligacao" class="secundario botao">← Voltar à ligação</a>
+        <span class="espaco"></span>
+        <span class="legenda">
+          <span class="selo-tipo rigida">rígida</span>
+          <span class="selo-tipo flexivel">flexível</span>
+          <span class="selo-tipo aguardar">aguardar</span>
+        </span>
+      </div>
+      <p class="discreto">As mudanças feitas aqui valem só para esta obra. Para levar uma mudança para as próximas obras, marque "salvar também na biblioteca padrão" (é feita uma cópia de segurança do Excel antes).</p>
+    </div>
+
+    <section class="cartao">
+      <h2>Sequência (ordem de execução possível)</h2>
+      <div class="rolagem">
+        <table id="tabela-sequencia" class="sequencia">
+          <thead><tr><th>#</th><th>Código</th><th class="desc">Atividade</th><th>Tipo</th><th>Depende de</th><th class="num">Itens</th><th class="num">Total c/ BDI</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p class="discreto legenda-deps"><span class="dep herdada">herdada</span> veio de uma atividade que não existe nesta obra ·
+        <span class="dep fim">fim</span> atividade sem sucessor, termina antes da limpeza final ·
+        <span class="dep usuario">editada</span> alterada nesta obra · <b>+3d</b> = esperar 3 dias corridos</p>
+    </section>
+
+    <section class="cartao">
+      <h2>Custos indiretos (fora da sequência)</h2>
+      <table class="simples">
+        <thead><tr><th>Código</th><th>Atividade</th><th>Período</th><th class="num">Itens</th><th class="num">Total c/ BDI</th></tr></thead>
+        <tbody id="tabela-indiretas"></tbody>
+      </table>
+    </section>
+  </section>
+</main>
+
+<script src="/static/comum.js"></script>
+<script src="/static/sequencia.js"></script>
+</body>
+</html>

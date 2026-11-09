@@ -394,7 +394,8 @@ $("#btn-salvar").addEventListener("click", async () => {
   $("#btn-salvar").disabled = true;
   try {
     const r = await api("/api/importacoes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(corpo) });
-    mensagem(msg, r.mensagem, "ok");
+    msg.className = "mensagem ok";
+    msg.innerHTML = `${esc(r.mensagem)} <a class="botao-link" href="/ligacao?obra=${r.id}">Seguir para a ligação com as atividades →</a>`;
     carregarSalvas();
   } catch (err) {
     mensagem(msg, err.message, "erro");
@@ -408,7 +409,7 @@ async function carregarSalvas() {
     const lista = await api("/api/importacoes");
     $("#salvas").hidden = lista.length === 0;
     $("#salvas tbody").innerHTML = lista
-      .map((o) => `<tr><td>${o.id}</td><td>${esc((o.nome || "").slice(0, 80))}</td><td>${esc(o.arquivo)}</td><td>${o.qtd_servicos}</td><td>${reais(o.soma_servicos)}</td><td>${esc((o.data_importacao || "").replace("T", " "))}</td></tr>`)
+      .map((o) => `<tr><td>${o.id}</td><td>${esc((o.nome || "").slice(0, 80))}</td><td>${esc(o.arquivo)}</td><td>${o.qtd_servicos}</td><td>${reais(o.soma_servicos)}</td><td>${esc((o.data_importacao || "").replace("T", " "))}</td><td><a href="/ligacao?obra=${o.id}">Ligação</a>${o.tem_rede ? ` · <a href="/sequencia?obra=${o.id}">Sequência</a>` : ""}</td></tr>`)
       .join("");
   } catch (_) { /* sem lista */ }
 }

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ligação com Atividades</title>
+  <link rel="stylesheet" href="/static/estilo.css">
+</head>
+<body>
+<header class="topo">
+  <h1><a href="/" class="link-topo">Cronograma de obras</a></h1>
+  <span class="etapa">Etapa 3 · Ligar os serviços às atividades</span>
+</header>
+
+<main>
+  <section id="erro-biblioteca" class="cartao alerta-erro" hidden></section>
+  <p id="msg-geral" class="mensagem"></p>
+
+  <section id="tela" hidden>
+    <div class="cartao">
+      <h2 id="nome-obra"></h2>
+      <div id="faixa" class="faixa"></div>
+      <div class="numeros" id="numeros"></div>
+      <div class="acoes-linha">
+        <button type="button" class="secundario" id="btn-refazer" title="Roda as regras de novo; as escolhas confirmadas por você são mantidas">Refazer reconhecimento automático</button>
+        <span class="espaco"></span>
+        <p id="msg-seguir" class="mensagem"></p>
+        <button type="button" class="primario grande" id="btn-seguir">Confirmar e seguir para a sequência →</button>
+      </div>
+    </div>
+
+    <section id="pendentes" class="cartao" hidden>
+      <h2>Pendentes <span id="qtd-pendentes" class="contador erro"></span></h2>
+      <p class="discreto">O app não conseguiu decidir sozinho. Escolha a atividade de cada serviço.</p>
+      <div id="lista-pendentes"></div>
+    </section>
+
+    <section class="cartao">
+      <h2>Serviços por atividade</h2>
+      <div class="filtros">
+        <label class="busca">Buscar <input type="search" id="busca" placeholder="atividade, item, código ou descrição"></label>
+        <label>Status
+          <select id="filtro-status">
+            <option value="">Todos</option>
+            <option value="automatico">Automático</option>
+            <option value="memoria">Memória</option>
+            <option value="confirmado">Confirmado</option>
+          </select>
+        </label>
+        <label class="inline"><input type="checkbox" id="mostrar-vazias"> Mostrar atividades sem serviços</label>
+        <span class="botoes">
+          <button type="button" class="secundario" id="btn-abrir">Abrir todas</button>
+          <button type="button" class="secundario" id="btn-fechar">Fechar todas</button>
+        </span>
+      </div>
+      <div id="lista-atividades"></div>
+    </section>
+  </section>
+</main>
+
+<dialog id="seletor">
+  <form method="dialog" class="seletor">
+    <h3>Escolher atividade</h3>
+    <div id="seletor-servico" class="seletor-servico"></div>
+    <div id="seletor-candidatas"></div>
+    <input type="search" id="seletor-busca" placeholder="Buscar por código ou nome (ex.: FUN-03, concretagem)" autocomplete="off">
+    <ul id="seletor-lista" class="seletor-lista"></ul>
+    <div class="acoes-linha"><span class="espaco"></span><button value="cancelar" class="secundario">Cancelar</button></div>
+  </form>
+</dialog>
+
+<script src="/static/comum.js"></script>
+<script src="/static/ligacao.js"></script>
+</body>
+</html>
