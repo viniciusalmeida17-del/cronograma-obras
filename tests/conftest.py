@@ -109,3 +109,56 @@ def linha_da_atividade(ws, codigo: str) -> int:
         if ws.cell(linha, 1).value == codigo:
             return linha
     raise KeyError(codigo)
+
+
+# ------------------------------------------------------------------ etapa 4
+
+
+@pytest.fixture(scope="session")
+def composicoes_teste(arquivo_teste):
+    from mao_de_obra.composicoes import ler_composicoes
+
+    return ler_composicoes(arquivo_teste, "PLANILHA")
+
+
+@pytest.fixture(scope="session")
+def tabela_funcoes():
+    from mao_de_obra.funcoes import carregar_funcoes
+
+    return carregar_funcoes(RAIZ / "dados" / "funcoes.xlsx")
+
+
+@pytest.fixture(scope="session")
+def analisador(composicoes_teste, tabela_funcoes, resultado):
+    from mao_de_obra.analise import Analisador, mapa_codigo_item
+    from mao_de_obra.funcoes import carregar_palavras_subcomposicao
+
+    return Analisador(composicoes_teste.composicoes, tabela_funcoes,
+                      carregar_palavras_subcomposicao(RAIZ / "dados" / "palavras_subcomposicao.txt"),
+                      mapa_codigo_item(resultado["servicos"]))
+
+
+@pytest.fixture(scope="session")
+def analise_por_item(analisador, resultado):
+    return {s["item"]: analisador.analisar_servico(s) for s in resultado["servicos"]}
+
+
+def copia_so_abas(arquivo, destino: Path, manter: tuple[str, ...]) -> Path:
+    """Cópia da planilha só com algumas abas (valores, sem fórmulas)."""
+    wb = openpyxl.load_workbook(arquivo, data_only=True)
+    for nome in list(wb.sheetnames):
+        if nome not in manter:
+            del wb[nome]
+    wb.save(destino)
+    return destino
+
+
+def preparar_obra(banco, arquivo, biblioteca):
+    """Importa, guarda o arquivo, liga as atividades e monta a rede. Retorna o id da obra."""
+    from atividades import obra as etapa3
+
+    obra_id = banco.salvar_importacao(ler_planilha(arquivo))
+    banco.guardar_arquivo(obra_id, arquivo)
+    etapa3.ligar_obra(banco, obra_id, biblioteca)
+    etapa3.montar_rede_obra(banco, obra_id, biblioteca)
+    return obra_id

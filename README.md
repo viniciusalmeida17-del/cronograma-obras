@@ -6,6 +6,7 @@ App local para montar o cronograma de uma obra a partir da planilha orçamentár
 |---|---|---|
 | 2 | Lê a planilha (.xlsx), separa grupos e serviços, confere os totais, tela de conferência | `ETAPA_2_LEITOR_DE_PLANILHA.md` |
 | 3 | Liga cada serviço a uma atividade da biblioteca, guarda as escolhas do usuário, monta a rede de atividades da obra | `ETAPA_3_LIGAR_SERVICOS_ATIVIDADES.md` |
+| 4 | Horas por função e de equipamento a partir das composições, própria × terceirizada, duração com a equipe padrão, resumo da obra | `ETAPA_4_MAO_DE_OBRA_E_DURACAO.md` |
 
 ## Como rodar
 
@@ -34,8 +35,14 @@ Variáveis opcionais: `PORTA` (padrão 5000), `CRONOGRAMA_BANCO` (padrão `crono
 | `  reconhecimento.py` | Liga serviços às atividades: memória → regras (prioridade, profundidade do grupo) → `ambiguo` / `sem_regra`. |
 | `  rede.py` | Atividades da obra, herança de dependências (com soma das esperas), ligação à LIM-01, ordem topológica, edição por obra. |
 | `  obra.py` | Aplica a etapa 3 a uma obra gravada no banco (usado pela tela e pelos testes). |
-| `dados/` | `biblioteca_atividades.xlsx`: biblioteca padrão, editada pelo engenheiro no Excel. |
-| `armazenamento/` | SQLite: `obras`, `grupos`, `servicos` (com `atividade_biblioteca`, `status_ligacao`, `regra_usada`), `memoria_ligacoes`, `obra_atividades`, `obra_dependencias`. Bancos da etapa 2 são migrados sozinhos. |
+| `mao_de_obra/` | Etapa 4, sem dependência da interface. |
+| `  funcoes.py` | Tabela de funções (`dados/funcoes.xlsx`) e classificação das linhas: mão de obra, equipamento (CHP/CHI), subcomposição. |
+| `  composicoes.py` | Lê as composições: formato A (abas por disciplina) e formato B (aba CPU, só para itens sem o A). |
+| `  analise.py` | Horas por unidade de cada serviço, expandindo subcomposições que são itens da planilha e usando o banco de coeficientes. |
+| `  calculo.py` | Estimativas (custo × razão horas/custo), duração com a equipe padrão, resumo por função, cobertura, pendências. |
+| `  obra.py` | Aplica a etapa 4 a uma obra gravada no banco. |
+| `dados/` | `biblioteca_atividades.xlsx` (biblioteca padrão), `funcoes.xlsx` (funções) e `palavras_subcomposicao.txt` (palavras que indicam serviço), todos editáveis. |
+| `armazenamento/` | SQLite: `obras`, `grupos`, `servicos` (com `atividade_biblioteca`, `status_ligacao`, `regra_usada`), `memoria_ligacoes`, `obra_atividades`, `obra_dependencias` e as tabelas da etapa 4 (`armazenamento/banco_etapa4.py`). Bancos antigos são migrados sozinhos. Uma cópia do .xlsx de cada obra fica em `arquivos_obras/`, ao lado do banco. |
 | `web/` | Servidor Flask local + tela de conferência (HTML/JS puro, sem build). |
 | `tests/` | Testes com o arquivo da Concorrência 2/2024 e o CSV esperado em `tests/dados/`. |
 
@@ -71,3 +78,29 @@ Variáveis opcionais: `PORTA` (padrão 5000), `CRONOGRAMA_BANCO` (padrão `crono
    - indiretas ficam fora da sequência, com o período guardado.
 5. Na tela da sequência dá para mudar tipo e dependências só nesta obra (com checagem de ciclo), ou marcar
    "salvar também na biblioteca padrão" (grava no Excel, com cópia de segurança antes).
+
+## Etapa 4 — mão de obra e duração
+
+1. Na tela da sequência, "Seguir para mão de obra e duração". O app lê as composições do arquivo da obra
+   (formato A nas abas por disciplina; formato B da aba CPU para o que faltar) e mostra em quais abas achou.
+2. **Horas por serviço** (origem registrada):
+   - `composicao`: linhas de mão de obra reconhecidas pela `funcoes.xlsx` (primeiro termo no começo da descrição),
+     mais as subcomposições que são itens da planilha, expandidas em profundidade (horas × coeficiente);
+   - `banco`: banco de coeficientes, alimentado por toda planilha importada e pelo que o usuário digita;
+     serve para planilhas futuras sem composições;
+   - `estimado` (amarelo): o que sobrou (subcomposição pendente ou serviço sem composição) =
+     custo × (horas ÷ custo dos serviços completos da mesma atividade → etapa → obra);
+   - `manual`: horas por unidade digitadas no serviço; vão para o banco;
+   - `sem_mao_de_obra`: só material ou equipamento.
+   Subcomposição pendente = insumo sem composição cuja descrição tem uma palavra de `dados/palavras_subcomposicao.txt`
+   (palavra inteira, ignorando o trecho depois de " PARA " e atributos como "APLICAÇÃO:"). Dá para digitar as horas dela,
+   que valem para todo serviço que a usa, nesta e nas próximas obras.
+3. **Parâmetros da obra**: horas/semana (44), dias/semana (5 ou 6), rendimento (90%: horas ÷ 0,9) e mudanças de jornada
+   (guardadas para a etapa 5).
+4. **Própria × terceirizada**: valor inicial da coluna `execucao_padrao`; as `perguntar` precisam de resposta
+   (com "aplicar à etapa inteira"). Terceirizada continua com horas para a duração, mas sai do resumo por função.
+5. **Duração** (dias úteis, para cima): função principal com `equipe_padrao` pessoas; as outras na proporção
+   (mínimo 1); maior entre funções e equipamentos (1 máquina de cada). `duracao_fixa_dias` = dias corridos.
+   Sem horas (ex.: terceirizada sem composição) = duração digitada, pendência obrigatória antes da etapa 5.
+6. **Resumo**: equipe indireta (fixa durante toda a obra e por período), horas ajustadas por função com a média
+   de pessoas no prazo da licitação, cobertura por origem e lista de pendências.

@@ -18,6 +18,8 @@ from armazenamento import Banco
 from atividades import ErroBiblioteca, carregar_biblioteca
 from atividades import obra as etapa3
 from leitor_planilha import NATUREZAS, ErroLeitura, ler_planilha
+from mao_de_obra import obra as etapa4
+from mao_de_obra.funcoes import ErroFuncoes
 
 PASTA_ESTATICA = Path(__file__).parent / "static"
 CAMPOS_OBRA_EDITAVEIS = ("nome", "prazo_valor", "prazo_unidade", "bdi", "desoneracao", "referencias")
@@ -54,6 +56,10 @@ def criar_app(
     @app.get("/sequencia")
     def pagina_sequencia():
         return send_from_directory(PASTA_ESTATICA, "sequencia.html")
+
+    @app.get("/mao-de-obra")
+    def pagina_mao_de_obra():
+        return send_from_directory(PASTA_ESTATICA, "mao_de_obra.html")
 
     @app.get("/static/<path:arquivo>")
     def estatico(arquivo):
@@ -142,6 +148,7 @@ def criar_app(
                 servico["natureza"] = natureza
 
         obra_id = banco.salvar_importacao(resultado)
+        banco.guardar_arquivo(obra_id, leituras[token]["caminho"])  # etapa 4 lê as composições dele
         return jsonify({"id": obra_id, "mensagem": f"Importação salva (obra nº {obra_id})."})
 
     @app.get("/api/importacoes")
@@ -205,6 +212,78 @@ def criar_app(
             salvar_na_biblioteca=bool(dados.get("salvar_biblioteca")),
             caminho_biblioteca=caminho_biblioteca,
         ))
+
+    # ------------------------------------------------------------------ etapa 4
+
+    def _biblioteca_opcional():
+        try:
+            return _biblioteca()
+        except ErroBiblioteca:
+            return None  # a obra já tem a cópia das atividades; a biblioteca só completa campos
+
+    @app.errorhandler(etapa4.ErroMaoDeObra)
+    def erro_mao_de_obra(exc):
+        precisa_arquivo = "arquivo da planilha" in str(exc)
+        return jsonify({"erro": str(exc), "precisa_arquivo": precisa_arquivo}), 409 if precisa_arquivo else 400
+
+    @app.errorhandler(ErroFuncoes)
+    def erro_funcoes(exc):
+        return jsonify({"erro": "A tabela de funções (dados/funcoes.xlsx) tem erros: " + str(exc)}), 422
+
+    def _estado(obra_id):
+        return jsonify(etapa4.estado_mao_de_obra(banco, obra_id, _biblioteca_opcional()))
+
+    @app.get("/api/obras/<int:obra_id>/mao-de-obra")
+    def mao_de_obra(obra_id):
+        if not banco.carregar_analises(obra_id):
+            return jsonify(etapa4.analisar_obra(banco, obra_id, _biblioteca_opcional()))
+        return _estado(obra_id)
+
+    @app.post("/api/obras/<int:obra_id>/mao-de-obra/analisar")
+    def reanalisar(obra_id):
+        return jsonify(etapa4.analisar_obra(banco, obra_id, _biblioteca_opcional()))
+
+    @app.post("/api/obras/<int:obra_id>/arquivo")
+    def anexar_arquivo(obra_id):
+        arquivo = request.files.get("arquivo")
+        if arquivo is None or not arquivo.filename.lower().endswith((".xlsx", ".xlsm")):
+            return _erro("Envie o arquivo .xlsx da planilha desta obra.")
+        temporario = uploads / f"obra_{obra_id}_{uuid.uuid4().hex}.xlsx"
+        arquivo.save(temporario)
+        banco.guardar_arquivo(obra_id, temporario)
+        return jsonify(etapa4.analisar_obra(banco, obra_id, _biblioteca_opcional()))
+
+    @app.post("/api/obras/<int:obra_id>/parametros")
+    def parametros(obra_id):
+        etapa4.salvar_parametros(banco, obra_id, request.get_json(silent=True) or {})
+        return _estado(obra_id)
+
+    @app.post("/api/obras/<int:obra_id>/execucao")
+    def execucao(obra_id):
+        dados = request.get_json(silent=True) or {}
+        etapa4.definir_execucao(banco, obra_id, dados.get("atividades") or [], dados.get("execucao"), _biblioteca_opcional())
+        return _estado(obra_id)
+
+    @app.post("/api/obras/<int:obra_id>/atividade/<codigo>")
+    def atividade_obra(obra_id, codigo):
+        dados = request.get_json(silent=True) or {}
+        campos = {k: dados[k] for k in ("rendimento", "equipe_padrao", "duracao_manual") if k in dados}
+        try:
+            etapa4.definir_atividade(banco, obra_id, codigo, biblioteca=_biblioteca_opcional(), **campos)
+        except ValueError:
+            return _erro("Valor inválido.")
+        return _estado(obra_id)
+
+    @app.post("/api/obras/<int:obra_id>/servico/<int:servico_id>/horas")
+    def horas_servico(obra_id, servico_id):
+        dados = request.get_json(silent=True) or {}
+        return jsonify(etapa4.definir_horas_servico(banco, obra_id, servico_id, dados.get("horas") or {}, _biblioteca_opcional()))
+
+    @app.post("/api/obras/<int:obra_id>/subcomposicao")
+    def horas_subcomposicao(obra_id):
+        dados = request.get_json(silent=True) or {}
+        return jsonify(etapa4.definir_horas_subcomposicao(banco, obra_id, dados.get("codigo"), dados.get("horas") or {},
+                                                          dados.get("descricao"), _biblioteca_opcional()))
 
     return app
 

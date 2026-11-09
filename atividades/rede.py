@@ -128,6 +128,8 @@ def montar_rede(biblioteca: Biblioteca, servicos: Iterable[Mapping[str, Any]], e
             "periodo_ate": a.periodo_ate if a.tipo == INDIRETA else None,
             "n_itens": t["n_itens"], "total": t["total"], "total_bdi": t["total_bdi"],
             "ordem_biblioteca": a.ordem, "editada": False,
+            "execucao_padrao": a.execucao_padrao, "equipe_padrao": a.equipe_padrao,
+            "equipe_max": a.equipe_max, "duracao_fixa_dias": a.duracao_fixa_dias,
         }
 
     na_sequencia = {c for c, a in atividades.items() if a["tipo"] != INDIRETA}

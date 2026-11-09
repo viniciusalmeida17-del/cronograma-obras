@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mão de Obra</title>
+  <link rel="stylesheet" href="/static/estilo.css">
+</head>
+<body>
+<header class="topo">
+  <h1><a href="/" class="link-topo">Cronograma de obras</a></h1>
+  <span class="etapa">Etapa 4 · Mão de obra e duração das atividades</span>
+</header>
+
+<main>
+  <p id="msg-geral" class="mensagem"></p>
+
+  <section id="enviar-arquivo" class="cartao" hidden>
+    <h2>Arquivo da planilha</h2>
+    <p>As composições de custo são lidas do mesmo arquivo .xlsx da planilha. Esta obra foi importada antes de o app guardar o arquivo: envie-o de novo.</p>
+    <form id="form-arquivo" class="acoes-linha">
+      <input type="file" id="arquivo" accept=".xlsx,.xlsm">
+      <button type="submit" class="primario">Enviar e calcular</button>
+    </form>
+  </section>
+
+  <section id="tela" hidden>
+    <div class="cartao">
+      <h2 id="nome-obra"></h2>
+      <div id="faixa" class="faixa"></div>
+      <div class="numeros" id="numeros"></div>
+      <p id="abas-composicoes" class="discreto"></p>
+      <div class="acoes-linha">
+        <a id="link-sequencia" class="botao">← Sequência</a>
+        <button type="button" class="secundario" id="btn-reanalisar" title="Relê as composições do arquivo (as horas digitadas são mantidas)">Reler composições</button>
+        <span class="espaco"></span>
+      </div>
+    </div>
+
+    <nav class="abas" id="abas">
+      <button type="button" data-aba="parametros">1. Parâmetros</button>
+      <button type="button" data-aba="execucao">2. Própria × terceirizada <span id="cont-execucao" class="contador erro" hidden></span></button>
+      <button type="button" data-aba="atividades">3. Mão de obra por atividade</button>
+      <button type="button" data-aba="resumo">4. Resumo da obra <span id="cont-pendencias" class="contador erro" hidden></span></button>
+    </nav>
+
+    <!-- 1. Parâmetros -->
+    <section class="cartao aba" id="aba-parametros" hidden>
+      <form id="form-parametros" class="grade-parametros">
+        <label>Horas por semana <input type="number" name="horas_semana" min="1" max="80" step="0.5"></label>
+        <label>Dias de trabalho por semana
+          <select name="dias_semana"><option value="5">5 (segunda a sexta)</option><option value="6">6 (com sábado)</option></select>
+        </label>
+        <label>Rendimento (%) <input type="number" name="rendimento" min="30" max="150" step="1">
+          <small>Horas ajustadas = horas da tabela ÷ rendimento. 90% = 11% a mais de horas.</small>
+        </label>
+        <div class="info-parametros">
+          <div><span class="discreto">Horas por dia</span> <b id="horas-dia"></b></div>
+          <div><span class="discreto">Prazo da licitação</span> <b id="prazo-licitacao"></b></div>
+        </div>
+        <fieldset class="largo">
+          <legend>Mudanças de jornada <small>(guardadas agora; a etapa 5 aplica semana a semana)</small></legend>
+          <div id="lista-mudancas"></div>
+          <button type="button" class="secundario pequeno" id="btn-add-mudanca">+ Acrescentar mudança</button>
+        </fieldset>
+        <div class="largo acoes-linha"><span class="espaco"></span><p id="msg-parametros" class="mensagem"></p><button type="submit" class="primario">Salvar parâmetros</button></div>
+      </form>
+    </section>
+
+    <!-- 2. Execução -->
+    <section class="cartao aba" id="aba-execucao" hidden>
+      <p class="discreto">Terceirizada: as horas continuam servindo para a duração, mas não contam como funcionários próprios. As marcadas como <b>perguntar</b> na biblioteca precisam de resposta.</p>
+      <div id="lista-execucao"></div>
+    </section>
+
+    <!-- 3. Atividades -->
+    <section class="cartao aba" id="aba-atividades" hidden>
+      <div class="legenda-origens" id="legenda-origens"></div>
+      <div class="rolagem">
+        <table class="mao-de-obra" id="tabela-atividades">
+          <thead><tr>
+            <th>Atividade</th><th>Execução</th><th>Função principal</th><th class="num">Horas (bruto → ajust.)</th>
+            <th class="num">Equip. (h)</th><th class="num">Equipe padrão</th><th class="num">Duração</th><th>Origem das horas</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 4. Resumo -->
+    <section class="aba" id="aba-resumo" hidden>
+      <div class="cartao" id="cartao-pendencias"></div>
+      <div class="cartao">
+        <h2>Equipe indireta</h2>
+        <div class="grade-duas">
+          <div><h3>Fixa durante toda a obra</h3><table class="simples"><thead><tr><th>Função</th><th class="num">Pessoas</th></tr></thead><tbody id="tabela-equipe-fixa"></tbody></table></div>
+          <div><h3>Por período</h3><table class="simples"><thead><tr><th>Função</th><th class="num">Pessoas</th><th>Período</th></tr></thead><tbody id="tabela-equipe-periodo"></tbody></table></div>
+        </div>
+      </div>
+      <div class="cartao">
+        <h2>Horas por função (só equipe própria)</h2>
+        <p class="discreto" id="info-media"></p>
+        <table class="simples"><thead><tr><th>Função</th><th class="num">Horas ajustadas</th><th class="num">Média de pessoas no prazo</th></tr></thead><tbody id="tabela-funcoes"></tbody></table>
+      </div>
+      <div class="cartao">
+        <h2>Cobertura</h2>
+        <p class="discreto">De onde vieram as horas, em % do custo da obra sem as indiretas.</p>
+        <div id="barra-cobertura" class="barra grande"></div>
+        <table class="simples" id="tabela-cobertura"></table>
+      </div>
+    </section>
+  </section>
+</main>
+
+<dialog id="dialogo-horas">
+  <form method="dialog" class="seletor" id="form-horas">
+    <h3 id="horas-titulo">Horas por unidade</h3>
+    <div id="horas-contexto" class="seletor-servico"></div>
+    <table class="simples"><thead><tr><th>Função</th><th class="num">Horas por unidade</th><th></th></tr></thead><tbody id="horas-linhas"></tbody></table>
+    <datalist id="lista-funcoes"></datalist>
+    <button type="button" class="secundario pequeno" id="btn-add-funcao">+ Função</button>
+    <p id="msg-horas" class="mensagem"></p>
+    <div class="acoes-linha">
+      <button type="button" class="secundario" id="btn-limpar-horas" hidden>Voltar ao cálculo automático</button>
+      <span class="espaco"></span>
+      <button value="cancelar" class="secundario">Cancelar</button>
+      <button type="button" class="primario" id="btn-salvar-horas">Salvar</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="/static/comum.js"></script>
+<script src="/static/mao_de_obra.js"></script>
+</body>
+</html>

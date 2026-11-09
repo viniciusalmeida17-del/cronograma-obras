@@ -1,0 +1,22 @@
+# Palavras que indicam que um insumo da composição é um SERVIÇO (subcomposição) e não um material.
+# Quando um insumo com uma destas palavras não tem composição no arquivo nem no banco de coeficientes,
+# ele vira "subcomposição pendente" e suas horas são estimadas.
+# Uma palavra por linha; comparação sem acento e sem diferenciar maiúsculas. Linhas com # são ignoradas.
+EXECUÇÃO
+ASSENTAMENTO
+INSTALAÇÃO
+APLICAÇÃO
+APLICADO
+LANÇAMENTO
+ARMAÇÃO
+ALVENARIA
+CHAPISCO
+EMBOÇO
+MASSA
+CONTRAPISO
+LAJE
+ARGAMASSA
+GRAUTE
+TRATAMENTO
+CONCRETAGEM
+MONTAGEM

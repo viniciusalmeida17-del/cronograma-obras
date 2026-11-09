@@ -409,7 +409,7 @@ async function carregarSalvas() {
     const lista = await api("/api/importacoes");
     $("#salvas").hidden = lista.length === 0;
     $("#salvas tbody").innerHTML = lista
-      .map((o) => `<tr><td>${o.id}</td><td>${esc((o.nome || "").slice(0, 80))}</td><td>${esc(o.arquivo)}</td><td>${o.qtd_servicos}</td><td>${reais(o.soma_servicos)}</td><td>${esc((o.data_importacao || "").replace("T", " "))}</td><td><a href="/ligacao?obra=${o.id}">Ligação</a>${o.tem_rede ? ` · <a href="/sequencia?obra=${o.id}">Sequência</a>` : ""}</td></tr>`)
+      .map((o) => `<tr><td>${o.id}</td><td>${esc((o.nome || "").slice(0, 80))}</td><td>${esc(o.arquivo)}</td><td>${o.qtd_servicos}</td><td>${reais(o.soma_servicos)}</td><td>${esc((o.data_importacao || "").replace("T", " "))}</td><td><a href="/ligacao?obra=${o.id}">Ligação</a>${o.tem_rede ? ` · <a href="/sequencia?obra=${o.id}">Sequência</a> · <a href="/mao-de-obra?obra=${o.id}">Mão de obra</a>` : ""}</td></tr>`)
       .join("");
   } catch (_) { /* sem lista */ }
 }

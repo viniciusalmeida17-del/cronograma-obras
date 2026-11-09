@@ -17,6 +17,9 @@ from leitor_planilha.texto import normalizar
 from .grafo import achar_ciclo
 
 TIPOS = ("rigida", "flexivel", "aguardar", "indireta")
+EXECUCOES_PADRAO = ("propria", "terceirizada", "perguntar")
+EQUIPE_PADRAO = 2
+EQUIPE_MAX = 6
 PERIODOS_ESPECIAIS = ("INICIO_OBRA", "FIM_OBRA")
 ABA_ATIVIDADES = "Atividades"
 ABA_REGRAS = "Regras"
@@ -57,9 +60,16 @@ class Atividade:
     periodo_ate: str | None
     linha_excel: int
     ordem: int  # posição na biblioteca (ordem das etapas da obra)
+    # etapa 4 (colunas opcionais; vazias usam os padrões)
+    execucao_padrao: str = "propria"
+    equipe_padrao: int = 2
+    equipe_max: int = 6
+    duracao_fixa_dias: int | None = None
 
     def como_dict(self) -> dict[str, Any]:
         return {
+            "execucao_padrao": self.execucao_padrao, "equipe_padrao": self.equipe_padrao,
+            "equipe_max": self.equipe_max, "duracao_fixa_dias": self.duracao_fixa_dias,
             "codigo": self.codigo, "etapa": self.etapa, "nome": self.nome,
             "depende_de": [{"codigo": d.codigo, "espera_dias": d.espera_dias} for d in self.depende_de],
             "depende_de_texto": formatar_dependencias(self.depende_de),
@@ -212,6 +222,27 @@ def _ler_atividades(ws, erros) -> dict[str, Atividade]:
         tipo = (_texto(val("tipo")) or "").lower()
         if tipo not in TIPOS:
             erros.append({"aba": ABA_ATIVIDADES, "linha": n, "mensagem": f"{codigo}: tipo '{tipo or '(vazio)'}' inválido (use {', '.join(TIPOS)})."})
+        opcional = lambda c: linha[cab[c]] if c in cab and cab[c] < len(linha) else None  # noqa: E731
+        execucao = (_texto(opcional("execucao_padrao")) or "propria").lower()
+        execucao = {"própria": "propria"}.get(execucao, execucao)
+        if execucao not in EXECUCOES_PADRAO:
+            erros.append({"aba": ABA_ATIVIDADES, "linha": n, "mensagem": f"{codigo}: execucao_padrao '{execucao}' inválida (use {', '.join(EXECUCOES_PADRAO)})."})
+        numeros = {}
+        for campo, padrao, minimo in (("equipe_padrao", EQUIPE_PADRAO, 1), ("equipe_max", EQUIPE_MAX, 1), ("duracao_fixa_dias", None, 0)):
+            bruto = opcional(campo)
+            if bruto is None or (isinstance(bruto, str) and not bruto.strip()):
+                numeros[campo] = padrao
+                continue
+            try:
+                valor = float(str(bruto).replace(",", "."))
+                if valor != int(valor) or valor < minimo:
+                    raise ValueError
+                numeros[campo] = int(valor)
+            except ValueError:
+                erros.append({"aba": ABA_ATIVIDADES, "linha": n, "mensagem": f"{codigo}: {campo} '{bruto}' inválido (número inteiro ≥ {minimo})."})
+                numeros[campo] = padrao
+        if numeros["equipe_padrao"] > numeros["equipe_max"]:
+            erros.append({"aba": ABA_ATIVIDADES, "linha": n, "mensagem": f"{codigo}: equipe_padrao ({numeros['equipe_padrao']}) maior que equipe_max ({numeros['equipe_max']})."})
         atividades[codigo] = Atividade(
             codigo=codigo, etapa=_texto(val("etapa")), nome=_texto(val("atividade")) or codigo,
             depende_de=deps, tipo=tipo, equipe_principal=_texto(val("equipe_principal")),
@@ -219,6 +250,7 @@ def _ler_atividades(ws, erros) -> dict[str, Atividade]:
             periodo_de=(_texto(val("periodo_de")) or "").upper() or None,
             periodo_ate=(_texto(val("periodo_ate")) or "").upper() or None,
             linha_excel=n, ordem=len(atividades),
+            execucao_padrao=execucao, **numeros,
         )
     return atividades
 

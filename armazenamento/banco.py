@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import sqlite3
 from datetime import datetime
 from contextlib import closing
 from typing import Any
+
+from .banco_etapa4 import ESQUEMA_ETAPA4, MaoDeObraMixin
 
 ESQUEMA = """
 CREATE TABLE IF NOT EXISTS obras (
@@ -24,7 +27,9 @@ CREATE TABLE IF NOT EXISTS obras (
     aba                 TEXT,
     linha_cabecalho     INTEGER,
     colunas             TEXT,            -- mapeamento JSON campo -> letra
-    data_importacao     TEXT
+    data_importacao     TEXT,
+    arquivo_salvo       TEXT,            -- cópia do .xlsx (etapa 4 lê as composições dele)
+    composicoes_abas    TEXT             -- JSON: abas onde foram achadas composições
 );
 
 CREATE TABLE IF NOT EXISTS grupos (
@@ -58,6 +63,7 @@ CREATE TABLE IF NOT EXISTS servicos (
     atividade_biblioteca  TEXT,
     status_ligacao        TEXT,            -- automatico, memoria, confirmado, ambiguo, sem_regra
     regra_usada           INTEGER,         -- número (ordem) da regra da biblioteca
+    origem_horas          TEXT,            -- etapa 4: composicao, banco, estimado, manual, sem_mao_de_obra
     -- previstos para as próximas etapas
     etapa_obra            TEXT,
     local                 TEXT
@@ -90,6 +96,10 @@ CREATE TABLE IF NOT EXISTS obra_atividades (
     observacao            TEXT,
     ordem_biblioteca      INTEGER,
     editada               INTEGER DEFAULT 0,
+    execucao_padrao       TEXT,
+    equipe_padrao         INTEGER,
+    equipe_max            INTEGER,
+    duracao_fixa_dias     INTEGER,
     PRIMARY KEY (obra_id, codigo)
 );
 
@@ -114,15 +124,22 @@ COLUNAS_SERVICO = (
 COLUNAS_OBRA_ATIVIDADE = (
     "codigo", "nome", "etapa", "tipo", "tipo_biblioteca", "total_bdi", "total", "n_itens",
     "periodo_de", "periodo_ate", "equipe_principal", "observacao", "ordem_biblioteca", "editada",
+    "execucao_padrao", "equipe_padrao", "equipe_max", "duracao_fixa_dias",
 )
 # Colunas acrescentadas depois da etapa 2 (migração de bancos antigos)
-MIGRACOES = {"servicos": {"status_ligacao": "TEXT", "regra_usada": "INTEGER"}}
+MIGRACOES = {
+    "servicos": {"status_ligacao": "TEXT", "regra_usada": "INTEGER", "origem_horas": "TEXT"},
+    "obras": {"arquivo_salvo": "TEXT", "composicoes_abas": "TEXT"},
+    "obra_atividades": {"execucao_padrao": "TEXT", "equipe_padrao": "INTEGER", "equipe_max": "INTEGER",
+                        "duracao_fixa_dias": "INTEGER"},
+}
 COLUNAS_GRUPO = ("linha_excel", "item", "descricao", "item_pai", "total_planilha", "total_bdi_planilha")
 
 
-class Banco:
+class Banco(MaoDeObraMixin):
     def __init__(self, caminho: str):
         self.caminho = caminho
+        self.pasta_arquivos = Path(caminho).resolve().parent / "arquivos_obras"
         with closing(self._conectar()) as con, con:
             for tabela, colunas in MIGRACOES.items():
                 existentes = {r["name"] for r in con.execute(f"PRAGMA table_info({tabela})")}
@@ -131,6 +148,7 @@ class Banco:
                         if coluna not in existentes:
                             con.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {tipo}")
             con.executescript(ESQUEMA)
+            con.executescript(ESQUEMA_ETAPA4)
 
     def _conectar(self) -> sqlite3.Connection:
         con = sqlite3.connect(self.caminho)
