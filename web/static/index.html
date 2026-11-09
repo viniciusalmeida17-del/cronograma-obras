@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Leitura da Planilha</title>
+  <link rel="stylesheet" href="/static/estilo.css">
+</head>
+<body>
+<header class="topo">
+  <h1>Cronograma de obras</h1>
+  <span class="etapa">Etapa 2 · Leitura da planilha de licitação</span>
+</header>
+
+<main>
+  <!-- Envio do arquivo -->
+  <section id="envio" class="cartao">
+    <h2>1. Planilha orçamentária</h2>
+    <form id="form-envio">
+      <label class="arquivo" id="area-arquivo">
+        <input type="file" id="arquivo" accept=".xlsx,.xlsm">
+        <span id="nome-arquivo">Escolha ou arraste o arquivo .xlsx da licitação</span>
+      </label>
+      <button type="submit" class="primario" id="btn-ler">Ler planilha</button>
+    </form>
+    <p id="msg-envio" class="mensagem"></p>
+    <details id="salvas" hidden>
+      <summary>Importações salvas</summary>
+      <table class="simples"><thead><tr><th>Nº</th><th>Obra</th><th>Arquivo</th><th>Serviços</th><th>Total</th><th>Data</th></tr></thead><tbody></tbody></table>
+    </details>
+  </section>
+
+  <section id="conferencia" hidden>
+    <!-- Aba e colunas -->
+    <div class="cartao">
+      <div class="linha-aba">
+        <label>Aba
+          <select id="aba"></select>
+        </label>
+        <span id="info-cabecalho" class="discreto"></span>
+        <button type="button" id="btn-ajustar" class="secundario">Ajustar colunas</button>
+      </div>
+      <div id="mapeamento" hidden>
+        <h3>Colunas da planilha</h3>
+        <p class="discreto">Aponte em qual coluna está cada informação. Os campos marcados com * são obrigatórios.</p>
+        <label class="inline">Linha do cabeçalho <input type="number" id="linha-cabecalho" min="1" max="100"></label>
+        <div id="grade-mapeamento" class="grade-mapeamento"></div>
+        <button type="button" id="btn-reler" class="primario">Ler novamente com estas colunas</button>
+      </div>
+    </div>
+
+    <!-- Resumo -->
+    <div class="cartao" id="resumo">
+      <div id="faixa" class="faixa"></div>
+      <div class="grade-obra">
+        <label class="largo">Obra
+          <textarea id="obra-nome" rows="2"></textarea>
+        </label>
+        <label>Prazo *
+          <span class="par">
+            <input type="number" id="obra-prazo" min="0" step="any">
+            <select id="obra-prazo-unidade">
+              <option value="">—</option>
+              <option value="dias">dias</option>
+              <option value="semanas">semanas</option>
+              <option value="meses">meses</option>
+              <option value="anos">anos</option>
+            </select>
+          </span>
+        </label>
+        <label>BDI (%)
+          <input type="number" id="obra-bdi" step="0.01" min="0">
+        </label>
+        <label>Desoneração
+          <input type="text" id="obra-desoneracao">
+        </label>
+        <label>Referências de preço <small>(uma por linha)</small>
+          <textarea id="obra-referencias" rows="4"></textarea>
+        </label>
+      </div>
+      <div class="numeros" id="numeros"></div>
+    </div>
+
+    <!-- Alertas -->
+    <details class="cartao" id="alertas">
+      <summary id="resumo-alertas">Alertas</summary>
+      <ul id="lista-alertas"></ul>
+    </details>
+
+    <!-- Serviços -->
+    <div class="cartao">
+      <div class="filtros">
+        <label>Grupo <select id="filtro-grupo"><option value="">Todos</option></select></label>
+        <label>Natureza
+          <select id="filtro-natureza">
+            <option value="">Todas</option>
+            <option value="producao">Produção</option>
+            <option value="tempo">Tempo</option>
+            <option value="transporte">Transporte</option>
+            <option value="taxa">Taxa</option>
+          </select>
+        </label>
+        <label class="busca">Buscar <input type="search" id="filtro-texto" placeholder="item, código ou descrição"></label>
+        <span class="botoes">
+          <button type="button" class="secundario" id="btn-expandir">Expandir tudo</button>
+          <button type="button" class="secundario" id="btn-recolher">Recolher tudo</button>
+        </span>
+      </div>
+      <p id="contagem-filtro" class="discreto"></p>
+      <div class="rolagem">
+        <table id="arvore">
+          <thead>
+            <tr>
+              <th>Item</th><th>Base</th><th>Código</th><th class="desc">Descrição</th><th>Und</th>
+              <th class="num">Quant.</th><th class="num">Preço unit.</th><th class="num">Total</th><th>Natureza</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="acoes">
+      <p id="msg-salvar" class="mensagem"></p>
+      <button type="button" class="primario grande" id="btn-salvar">Confirmar e salvar importação</button>
+    </div>
+  </section>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>
