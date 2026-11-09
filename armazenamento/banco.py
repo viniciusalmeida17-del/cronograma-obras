@@ -9,6 +9,7 @@ from contextlib import closing
 from typing import Any
 
 from .banco_etapa4 import ESQUEMA_ETAPA4, MaoDeObraMixin
+from .banco_etapa5 import ESQUEMA_ETAPA5, CronogramaMixin
 
 ESQUEMA = """
 CREATE TABLE IF NOT EXISTS obras (
@@ -131,13 +132,14 @@ MIGRACOES = {
     "servicos": {"status_ligacao": "TEXT", "regra_usada": "INTEGER", "origem_horas": "TEXT"},
     "obras": {"arquivo_salvo": "TEXT", "composicoes_abas": "TEXT"},
     "atividade_resumo": {"maquinas": "TEXT"},
+    "atividade_execucao": {"equipe_travada": "INTEGER"},
     "obra_atividades": {"execucao_padrao": "TEXT", "equipe_padrao": "INTEGER", "equipe_max": "INTEGER",
                         "duracao_fixa_dias": "INTEGER"},
 }
 COLUNAS_GRUPO = ("linha_excel", "item", "descricao", "item_pai", "total_planilha", "total_bdi_planilha")
 
 
-class Banco(MaoDeObraMixin):
+class Banco(MaoDeObraMixin, CronogramaMixin):
     def __init__(self, caminho: str):
         self.caminho = caminho
         self.pasta_arquivos = Path(caminho).resolve().parent / "arquivos_obras"
@@ -150,6 +152,7 @@ class Banco(MaoDeObraMixin):
                             con.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {tipo}")
             con.executescript(ESQUEMA)
             con.executescript(ESQUEMA_ETAPA4)
+            con.executescript(ESQUEMA_ETAPA5)
 
     def _conectar(self) -> sqlite3.Connection:
         con = sqlite3.connect(self.caminho)

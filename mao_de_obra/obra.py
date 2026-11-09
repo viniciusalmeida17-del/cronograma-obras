@@ -67,6 +67,7 @@ def analisar_obra(
     manuais = banco.horas_manuais(obra_id)
     analises = {s["id"]: analisador.analisar_servico(s, manuais.get(s["id"])) for s in servicos}
     banco.gravar_analises(obra_id, analises)
+    banco.gravar_custos_mao_de_obra(analises)
     banco.gravar_abas_composicoes(obra_id, lidas.resumo_abas())
 
     # banco de coeficientes: horas lidas das composições desta planilha, por base + código

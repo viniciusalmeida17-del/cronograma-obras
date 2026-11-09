@@ -7,13 +7,41 @@ App local para montar o cronograma de uma obra a partir da planilha orçamentár
 | 2 | Lê a planilha (.xlsx), separa grupos e serviços, confere os totais, tela de conferência | `ETAPA_2_LEITOR_DE_PLANILHA.md` |
 | 3 | Liga cada serviço a uma atividade da biblioteca, guarda as escolhas do usuário, monta a rede de atividades da obra | `ETAPA_3_LIGAR_SERVICOS_ATIVIDADES.md` |
 | 4 | Horas por função e de equipamento a partir das composições, própria × terceirizada, duração com a equipe padrão, resumo da obra | `ETAPA_4_MAO_DE_OBRA_E_DURACAO.md` |
+| 5 | Cronograma com datas (otimizador OR-Tools), equipe por semana sem demitir e recontratar, comparação de prazos | `ETAPA_5_CRONOGRAMA_E_EQUIPES.md` |
 
 ## Como rodar
 
+O otimizador da etapa 5 usa o **OR-Tools**, que tem pacote para Python **3.10 a 3.14**, mas **ainda não para o 3.15**.
+Por isso o projeto roda num ambiente virtual com Python 3.14.
+
+### Windows (uma vez só, na pasta do projeto)
+
+```bat
+py install 3.14
+py -3.14 -m venv .venv
+.venv\Scripts\activate
+python -m pip install -r requirements.txt
+```
+
+(Se o `py install` não existir no seu computador, instale o Python 3.14 pelo site python.org e use os mesmos comandos a partir do `py -3.14 -m venv .venv`.)
+
+### No dia a dia (Windows)
+
+```bat
+.venv\Scripts\activate
+python -m web.app
+python -m pytest
+```
+
+O `web.app` abre http://127.0.0.1:5000 no navegador; o `pytest` roda os testes (uns 2 minutos).
+
+### Linux / macOS
+
 ```bash
+python3.14 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-python -m web.app          # abre http://127.0.0.1:5000 no navegador
-python -m pytest           # testes automáticos
+python -m web.app
+python -m pytest
 ```
 
 Variáveis opcionais: `PORTA` (padrão 5000), `CRONOGRAMA_BANCO` (padrão `cronograma.sqlite3`),
@@ -41,8 +69,14 @@ Variáveis opcionais: `PORTA` (padrão 5000), `CRONOGRAMA_BANCO` (padrão `crono
 | `  analise.py` | Horas por unidade de cada serviço, expandindo subcomposições que são itens da planilha e usando o banco de coeficientes. |
 | `  calculo.py` | Estimativas (custo × razão horas/custo), duração com a equipe padrão, resumo por função, cobertura, pendências. |
 | `  obra.py` | Aplica a etapa 4 a uma obra gravada no banco. |
+| `cronograma/` | Etapa 5, sem dependência da interface. |
+| `  calendario.py` | Dias úteis (5 ou 6 por semana), feriados nacionais fixos e móveis (Páscoa), feriados locais, jornada por semana. |
+| `  modelo.py` | Tarefas e modos (1 até `equipe_max` da função principal; as outras na proporção; modos sem ganho de prazo são retirados). |
+| `  agenda.py` | Solução inicial (busca local), caminho crítico, folgas, equipe por semana, custos e a verificação de todas as restrições. |
+| `  otimizador.py` | Modelo CP-SAT: início e modo de cada atividade, contratados por função e semana, sobe-e-desce, prazo, máximos. |
+| `  obra.py` | Aplica a etapa 5 a uma obra do banco: parâmetros, custos por hora, indiretos por tempo, cenários, comparação, Excel. |
 | `dados/` | `biblioteca_atividades.xlsx` (biblioteca padrão), `funcoes.xlsx` (funções) e `palavras_subcomposicao.txt` (palavras que indicam serviço), todos editáveis. |
-| `armazenamento/` | SQLite: `obras`, `grupos`, `servicos` (com `atividade_biblioteca`, `status_ligacao`, `regra_usada`), `memoria_ligacoes`, `obra_atividades`, `obra_dependencias` e as tabelas da etapa 4 (`armazenamento/banco_etapa4.py`). Bancos antigos são migrados sozinhos. Uma cópia do .xlsx de cada obra fica em `arquivos_obras/`, ao lado do banco. |
+| `armazenamento/` | SQLite: `obras`, `grupos`, `servicos` (com `atividade_biblioteca`, `status_ligacao`, `regra_usada`), `memoria_ligacoes`, `obra_atividades`, `obra_dependencias` as tabelas da etapa 4 (`armazenamento/banco_etapa4.py`) e as da etapa 5 (`armazenamento/banco_etapa5.py`: `obra_calendario`, `cenarios`, `cenario_atividades`, `cenario_equipe_semana`, `custos_hora_padrao`). Bancos antigos são migrados sozinhos. Uma cópia do .xlsx de cada obra fica em `arquivos_obras/`, ao lado do banco. |
 | `web/` | Servidor Flask local + tela de conferência (HTML/JS puro, sem build). |
 | `tests/` | Testes com o arquivo da Concorrência 2/2024 e o CSV esperado em `tests/dados/`. |
 
@@ -105,3 +139,29 @@ Variáveis opcionais: `PORTA` (padrão 5000), `CRONOGRAMA_BANCO` (padrão `crono
    Sem horas (ex.: terceirizada sem composição) = duração digitada, pendência obrigatória antes da etapa 5.
 6. **Resumo**: equipe indireta (fixa durante toda a obra e por período), horas ajustadas por função com a média
    de pessoas no prazo da licitação, cobertura por origem e lista de pendências.
+
+## Etapa 5 — cronograma, equipes e prazos
+
+1. Na tela de mão de obra (sem pendências), "Seguir para o cronograma".
+2. **Parâmetros**: data de início (obrigatória), feriados locais, limite das rígidas (5 dias úteis), tempo limite por cenário (60 s),
+   máximo de pessoas no canteiro e por função (opcionais), custo por hora de cada função e equipes travadas.
+   - Custo por hora inicial = média, ponderada pelas horas, do preço das linhas de mão de obra das composições; quando a função
+     tem linhas "com encargos complementares", só elas entram (Pedreiro R$ 24,43 na planilha de teste). O valor salvo vale
+     para a obra e vira o padrão da próxima.
+3. **Calendário**: esperas (`+3d`) e `duracao_fixa_dias` em dias corridos; durações com equipe em dias úteis; B começa no primeiro
+   dia útil depois de término de A + espera. Jornada da semana de início vale para a atividade inteira.
+4. **Otimizador** (OR-Tools CP-SAT), por cenário:
+   - decide o início e o tamanho da equipe de cada atividade própria e os contratados de cada função por semana;
+   - dependências, rígidas até o limite depois de liberadas, "aguardar" logo que liberada, capacidade diária ≤ contratados da
+     semana, cada função sobe até um pico e depois só desce (não demite e recontrata), prazo e máximos;
+   - minimiza mão de obra paga (contratados × horas da semana × custo/h, inclusive as horas paradas) + indiretos por tempo,
+     com desempate por terminar mais cedo;
+   - parte de uma solução inicial (equipe padrão ou mínima, aumentando a do caminho crítico até caber, e depois troca de modos
+     enquanto o custo cair); mostra se a solução é ótima ou a melhor encontrada no tempo.
+   - Prazo impossível: informa o menor prazo com a equipe máxima e o caminho crítico.
+5. **Indiretos por tempo**: itens em MÊS. Obra toda = valor ÷ prazo da licitação por mês; entre atividades = valor ÷ quantidade
+   por mês; custo = R$/mês × duração real do período. M2/MÊS, % e o resto ficam fixos ("não varia com o prazo nesta versão").
+6. **Cenários**: padrão prazo − 3, − 2, − 1 e o próprio (meses); tabela comparativa; o mais barato fica destacado e o escolhido
+   vira o cronograma da obra. Gantt (cores por tipo, caminho crítico, folga, faixas das indiretas), equipe por semana (gráfico com
+   a parte parada hachurada, tabela semana × função com entrada, pico e saída, equipe indireta à parte, exportação para Excel)
+   e resumo.

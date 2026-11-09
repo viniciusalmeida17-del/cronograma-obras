@@ -290,3 +290,49 @@ details.pendentes-sub table { font-size: 12px; background: #fff; }
 fieldset.maquinas { flex-basis: 100%; display: flex; flex-direction: column; gap: 4px; }
 fieldset.maquinas label { font-weight: 400; }
 fieldset.maquinas input { width: 64px; }
+
+/* ---------------------------------------------------------------- etapa 5 */
+table.comparacao td { vertical-align: top; }
+table.comparacao tr.mais-barato td { background: #eef7ee; }
+table.comparacao tr.escolhido td:first-child { box-shadow: inset 4px 0 0 #2a78d6; }
+table.comparacao tr.impossivel td { background: #fbf3f1; color: #52514e; }
+td.economia { color: #006300; }
+.dica { position: fixed; z-index: 50; max-width: 360px; background: #fff; border: 1px solid #c3c2b7; border-radius: 6px;
+  padding: 8px 10px; font-size: 13px; line-height: 1.4; box-shadow: 0 4px 14px rgba(0,0,0,.12); pointer-events: none; color: #0b0b0b; }
+.gantt { overflow: auto; max-height: 75vh; border: 1px solid #e1e0d9; border-radius: 6px; background: #fcfcfb; }
+.g-linha { display: flex; min-height: 20px; border-bottom: 1px solid #f0efec; }
+.g-rotulo { position: sticky; left: 0; z-index: 2; flex: 0 0 260px; width: 260px; background: #fcfcfb; font-size: 12px; padding: 2px 8px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-right: 1px solid #e1e0d9; }
+.g-trilho { position: relative; flex: none; }
+.g-barra { position: absolute; top: 4px; height: 12px; border-radius: 3px; cursor: default; }
+.g-barra.critica { box-shadow: 0 0 0 2px #d03b3b; }
+.g-critica .g-rotulo { color: #a32424; font-weight: 600; }
+.g-etapa .g-rotulo { font-weight: 700; background: #f3f2ee; }
+.g-etapa .g-trilho { background: #f3f2ee; }
+.g-regua { position: sticky; top: 0; z-index: 3; background: #fcfcfb; min-height: 22px; }
+.g-regua .g-rotulo { z-index: 4; }
+.g-regua .mes { position: absolute; top: 3px; font-size: 11px; color: #898781; border-left: 1px solid #c3c2b7; padding-left: 3px; }
+.g-indireta { min-height: 12px; }
+.g-indireta .g-rotulo { font-size: 11px; color: #52514e; }
+.g-faixa { position: absolute; top: 4px; height: 4px; border-radius: 2px; background: #898781; }
+i.quadrado.critica { background: #fff; box-shadow: inset 0 0 0 2px #d03b3b; }
+i.quadrado.parado { background: repeating-linear-gradient(45deg, #898781 0 2px, #e1e0d9 2px 5px); }
+.legenda { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: #52514e; }
+.legenda i.quadrado { display: inline-block; width: 11px; height: 11px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.grafico-equipe { overflow-x: auto; margin: 8px 0 16px; }
+.grafico-equipe .grade { stroke: #e1e0d9; stroke-width: 1; }
+.grafico-equipe .grade.base { stroke: #c3c2b7; }
+.grafico-equipe .eixo { font-size: 11px; fill: #898781; }
+table.equipe-semana { font-size: 12px; }
+table.equipe-semana td, table.equipe-semana th { padding: 2px 5px; }
+table.equipe-semana td.ocioso { color: #898781; background: #f5f4f0; }
+table.equipe-semana tr.total td { font-weight: 700; border-top: 2px solid #c3c2b7; }
+table.equipe-semana tr.separador td { font-weight: 600; color: #52514e; padding-top: 10px; }
+table.equipe-semana tr.indireta td { color: #52514e; font-style: italic; }
+a.botao.primario { background: #2a78d6; color: #fff; border-color: #2a78d6; }
+a.botao.desabilitado { opacity: .55; }
+table.comparacao { font-size: 13px; }
+table.comparacao th, table.comparacao th.num { white-space: normal; vertical-align: bottom; min-width: 70px; }
+table.comparacao .selo { display: inline-block; white-space: nowrap; margin: 1px 0; }
+table.comparacao .botoes-cenario { margin-top: 4px; white-space: nowrap; }
+#tabela-custos input { max-width: 110px; }

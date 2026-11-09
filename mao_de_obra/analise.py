@@ -60,6 +60,8 @@ class AnaliseComposicao:
     pendentes: list[dict[str, Any]] = field(default_factory=list)
     indireta: dict[str, float] = field(default_factory=lambda: defaultdict(float))           # funcao -> pessoas/mês
     expandidos: list[dict[str, Any]] = field(default_factory=list)
+    # funcao -> [horas, R$, horas "com encargos", R$ "com encargos"] das linhas de mão de obra com preço
+    custos: dict[str, list[float]] = field(default_factory=lambda: defaultdict(lambda: [0.0, 0.0, 0.0, 0.0]))
 
     def total_horas(self) -> float:
         return sum(self.horas.values())
@@ -99,6 +101,13 @@ class Analisador:
                         res.indireta[regra.funcao] += coef
                     continue  # em composição de serviço, indireta é ignorada
                 res.horas[(regra.funcao, COMPOSICAO)] += coef
+                if linha.preco and linha.preco > 0:
+                    acc = res.custos[regra.funcao]
+                    acc[0] += coef
+                    acc[1] += coef * linha.preco
+                    if "ENCARGOS" in normalizar(linha.descricao):
+                        acc[2] += coef
+                        acc[3] += coef * linha.preco
                 continue
             codigo = chave_codigo(linha.codigo)
             sub_item = self.codigo_para_item.get(codigo) if codigo else None
@@ -108,6 +117,10 @@ class Analisador:
                     res.horas[chave] += h * coef
                 for nome, h in sub.equipamentos.items():
                     res.equipamentos[nome] += h * coef
+                for funcao, valores in sub.custos.items():
+                    acc = res.custos[funcao]
+                    for k, v in enumerate(valores):
+                        acc[k] += v * coef
                 for p in sub.pendentes:
                     res.pendentes.append({**p, "coeficiente": p["coeficiente"] * coef,
                                           "total_linha": (p["total_linha"] or 0.0) * coef,
@@ -146,6 +159,8 @@ class Analisador:
             "linha_excel": servico.get("linha_excel"), "item": item,
             "composicao": {"aba": comp.aba, "linha": comp.linha_excel, "formato": comp.formato} if comp else None,
             "horas": {}, "equipamentos": {}, "pendentes": [], "indireta": {}, "expandidos": [],
+            # funcao -> horas e R$ por unidade das linhas de mão de obra com preço (todas e só as "com encargos")
+            "custos_mo": {},
         }
         if comp:
             a = self.analisar_composicao(item)
@@ -154,6 +169,8 @@ class Analisador:
                 pendentes=[dict(p) for p in a.pendentes],
                 indireta={k: v for k, v in a.indireta.items() if v},
                 expandidos=a.expandidos,
+                custos_mo={f: {"horas_un": v[0], "custo_un": v[1], "horas_un_encargos": v[2], "custo_un_encargos": v[3]}
+                           for f, v in a.custos.items() if v[0] > 0 and v[1] > 0},
             )
             horas = {k: v for k, v in a.horas.items() if v}
         else:

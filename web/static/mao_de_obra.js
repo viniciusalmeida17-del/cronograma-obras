@@ -36,6 +36,9 @@ function desenhar() {
   const d = est.d;
   $("#nome-obra").textContent = `Obra nº ${obraId} · ${d.obra.nome || d.obra.arquivo}`;
   $("#link-sequencia").href = `/sequencia?obra=${obraId}`;
+  $("#link-cronograma").href = `/cronograma?obra=${obraId}`;
+  $("#link-cronograma").classList.toggle("desabilitado", d.pendencias.length > 0);
+  $("#link-cronograma").title = d.pendencias.length ? "Resolva as pendências antes do cronograma" : "Etapa 5: cronograma com datas e equipes";
   const pend = d.pendencias.length;
   $("#faixa").className = "faixa " + (pend ? "aviso" : "ok");
   $("#faixa").textContent = pend

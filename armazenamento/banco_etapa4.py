@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS atividade_execucao (
     rendimento            REAL,               -- opcional: substitui o da obra
     equipe_padrao         INTEGER,            -- opcional: substitui o da biblioteca
     duracao_manual        INTEGER,            -- opcional: dias úteis
+    equipe_travada        INTEGER,            -- etapa 5: pessoas da função principal (opcional)
     PRIMARY KEY (obra_id, atividade)
 );
 

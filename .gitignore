@@ -3,3 +3,4 @@ __pycache__/
 *.sqlite3
 dados/backup/
 arquivos_obras/
+.venv/

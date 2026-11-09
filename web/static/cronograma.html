@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cronograma</title>
+  <link rel="stylesheet" href="/static/estilo.css">
+</head>
+<body>
+<header class="topo">
+  <h1><a href="/" class="link-topo">Cronograma de obras</a></h1>
+  <span class="etapa">Etapa 5 · Cronograma, equipes por semana e comparação de prazos</span>
+</header>
+
+<main>
+  <p id="msg-geral" class="mensagem"></p>
+
+  <section id="tela" hidden>
+    <div class="cartao">
+      <h2 id="nome-obra"></h2>
+      <div id="faixa" class="faixa"></div>
+      <div class="acoes-linha">
+        <a id="link-mao-de-obra" class="botao">← Mão de obra e duração</a>
+        <span class="espaco"></span>
+      </div>
+    </div>
+
+    <nav class="abas" id="abas">
+      <button type="button" data-aba="parametros">1. Parâmetros</button>
+      <button type="button" data-aba="cenarios">2. Cenários</button>
+      <button type="button" data-aba="gantt">3. Gantt</button>
+      <button type="button" data-aba="equipe">4. Equipe por semana</button>
+      <button type="button" data-aba="resumo">5. Resumo</button>
+    </nav>
+
+    <!-- 1. Parâmetros -->
+    <section class="cartao aba" id="aba-parametros" hidden>
+      <form id="form-parametros" class="grade-parametros">
+        <label>Data de início da obra <input type="date" name="data_inicio" required></label>
+        <label>Limite das rígidas (dias úteis) <input type="number" name="limite_rigidas" min="0" max="60" step="1">
+          <small>A rígida começa até este número de dias úteis depois de liberada.</small></label>
+        <label>Tempo limite por cenário (s) <input type="number" name="tempo_limite" min="5" max="3600" step="5"></label>
+        <label>Máximo de pessoas no canteiro <input type="number" name="max_pessoas_total" min="1" step="1" placeholder="sem limite">
+          <small>Opcional: soma dos próprios de todas as funções.</small></label>
+        <div class="info-parametros largo">
+          <div><span class="discreto">Dias de trabalho por semana</span> <b id="info-dias"></b></div>
+          <div><span class="discreto">Jornada</span> <b id="info-jornada"></b></div>
+          <div class="discreto">(vêm da etapa 4; os feriados nacionais, inclusive Carnaval, Sexta-feira Santa e Corpus Christi, são calculados pelo ano)</div>
+        </div>
+        <fieldset class="largo">
+          <legend>Feriados locais</legend>
+          <div id="lista-feriados"></div>
+          <button type="button" class="secundario pequeno" id="btn-add-feriado">+ Acrescentar feriado</button>
+        </fieldset>
+        <fieldset class="largo">
+          <legend>Custo por hora das funções (com encargos) e máximo de pessoas</legend>
+          <p class="discreto">Valor inicial: média das composições, ponderada pelas horas. O valor salvo vale para esta obra e vira o padrão da próxima.</p>
+          <table class="simples"><thead><tr><th>Função</th><th class="num">R$/h</th><th>Origem</th><th class="num">Composições</th><th class="num">Máximo (opcional)</th></tr></thead>
+            <tbody id="tabela-custos"></tbody></table>
+        </fieldset>
+        <div class="largo acoes-linha"><span class="espaco"></span><p id="msg-parametros" class="mensagem"></p><button type="submit" class="primario">Salvar parâmetros</button></div>
+      </form>
+      <h3>Travar o tamanho da equipe</h3>
+      <p class="discreto">Atividade travada tem um modo só (ex.: "fundação sempre com 3 armadores"). Sem trava, o otimizador escolhe de 1 até a equipe máxima.</p>
+      <div class="rolagem"><table class="simples" id="tabela-travas"><thead><tr><th>Atividade</th><th>Função principal</th><th class="num">Padrão</th><th class="num">Máxima</th><th>Equipe travada</th></tr></thead><tbody></tbody></table></div>
+      <p id="msg-travas" class="mensagem"></p>
+    </section>
+
+    <!-- 2. Cenários -->
+    <section class="cartao aba" id="aba-cenarios" hidden>
+      <form id="form-calcular" class="acoes-linha">
+        <label>Prazos a comparar (meses) <input type="text" name="prazos" size="22" placeholder="ex.: 9; 10; 11; 12"></label>
+        <label>Tempo limite por cenário (s) <input type="number" name="tempo_limite" min="5" max="3600" step="5"></label>
+        <button type="submit" class="primario" id="btn-calcular">Calcular</button>
+        <button type="button" class="secundario" id="btn-parar" hidden>Parar</button>
+        <span class="espaco"></span>
+      </form>
+      <div id="progresso" hidden>
+        <div class="barra grande"><span id="progresso-barra" style="width:0%; background:#2a78d6"></span></div>
+        <p id="progresso-texto" class="discreto"></p>
+      </div>
+      <p id="msg-cenarios" class="mensagem"></p>
+      <div class="rolagem">
+        <table class="simples comparacao" id="tabela-cenarios">
+          <thead><tr>
+            <th>Prazo do cenário</th><th>Término previsto</th><th class="num">Pico de pessoas</th><th class="num">Homem-semana pago</th>
+            <th class="num">Ociosidade</th><th class="num">Mão de obra própria</th><th class="num">Indiretos por tempo</th>
+            <th class="num">Total que varia com o prazo</th><th class="num">Diferença p/ licitação</th><th>Situação</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p class="discreto">Diferença positiva = economia em relação ao prazo da licitação. Indiretos por tempo: itens em MÊS, pelo período real
+        (obra toda: valor ÷ prazo da licitação por mês; entre atividades: valor ÷ quantidade por mês).</p>
+    </section>
+
+    <!-- 3. Gantt -->
+    <section class="cartao aba" id="aba-gantt" hidden>
+      <div class="acoes-linha"><label>Cenário <select class="sel-cenario"></select></label><span class="espaco"></span>
+        <div class="legenda" id="legenda-gantt"></div></div>
+      <div id="gantt" class="gantt"></div>
+      <div id="dica" class="dica" hidden></div>
+    </section>
+
+    <!-- 4. Equipe por semana -->
+    <section class="cartao aba" id="aba-equipe" hidden>
+      <div class="acoes-linha"><label>Cenário <select class="sel-cenario"></select></label><span class="espaco"></span>
+        <a id="link-excel" class="botao">Exportar para Excel</a></div>
+      <h3>Pessoas contratadas por semana (próprios)</h3>
+      <div class="legenda" id="legenda-equipe"></div>
+      <div id="grafico-equipe" class="grafico-equipe"></div>
+      <h3>Semana × função</h3>
+      <div class="rolagem"><table class="simples equipe-semana" id="tabela-equipe"></table></div>
+    </section>
+
+    <!-- 5. Resumo -->
+    <section class="aba" id="aba-resumo" hidden>
+      <div class="cartao">
+        <div class="acoes-linha"><label>Cenário <select class="sel-cenario"></select></label></div>
+        <div class="numeros" id="numeros-resumo"></div>
+      </div>
+      <div class="cartao"><h2>Caminho crítico</h2><p id="caminho-critico"></p></div>
+      <div class="cartao"><h2>Indiretos</h2>
+        <table class="simples"><thead><tr><th>Item</th><th>Período</th><th class="num">Meses</th><th class="num">R$/mês</th><th class="num">Custo</th><th>Como entra</th></tr></thead>
+          <tbody id="tabela-indiretos"></tbody></table></div>
+    </section>
+  </section>
+</main>
+
+<script src="/static/comum.js"></script>
+<script src="/static/cronograma.js"></script>
+</body>
+</html>
