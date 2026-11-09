@@ -23,9 +23,9 @@ def _h(analise):
 
 
 def test_tabela_de_funcoes(tabela_funcoes):
-    assert len(tabela_funcoes.regras) == 40
+    assert len(tabela_funcoes.regras) == 37
     assert tabela_funcoes.identificar("AJUDANTE DE ARMADOR COM ENCARGOS COMPLEMENTARES").funcao == "Servente"
-    assert tabela_funcoes.identificar("AUXILIAR DE ELETRICISTA COM ENCARGOS").funcao == "Auxiliar de eletricista"
+    assert tabela_funcoes.identificar("AUXILIAR DE ELETRICISTA COM ENCARGOS").funcao == "Servente"
     assert tabela_funcoes.identificar("ELETRICISTA COM ENCARGOS COMPLEMENTARES").funcao == "Eletricista"
     assert tabela_funcoes.identificar("LOCACAO VEICULO POPULAR (ENGENHEIRO E ENCARREGADO)") is None
     assert tabela_funcoes.identificar("TÉCNICO EM SEGURANÇA DO TRABALHO COM ENCARGOS").categoria == "indireta"
@@ -34,11 +34,11 @@ def test_tabela_de_funcoes(tabela_funcoes):
 def test_biblioteca_com_colunas_novas(biblioteca):
     assert len(biblioteca.atividades) == 80
     est03 = biblioteca.atividades["EST-03"]
-    assert est03.duracao_fixa_dias == 21
+    assert est03.duracao_fixa_dias == 28
     assert biblioteca.atividades["MET-01"].execucao_padrao == "terceirizada"
     assert biblioteca.atividades["ELE-04"].execucao_padrao == "perguntar"
     fun03 = biblioteca.atividades["FUN-03"]
-    assert (fun03.equipe_padrao, fun03.equipe_max) == (2, 6)  # colunas vazias = padrões
+    assert (fun03.equipe_padrao, fun03.equipe_max) == (2, 20)  # colunas vazias = padrões
 
 
 def test_biblioteca_sem_as_colunas_novas_usa_padroes(tmp_path):
@@ -52,7 +52,7 @@ def test_biblioteca_sem_as_colunas_novas_usa_padroes(tmp_path):
 
     b = carregar_biblioteca(copiar_biblioteca(tmp_path / "antiga.xlsx", tirar))
     a = b.atividades["FUN-03"]
-    assert (a.execucao_padrao, a.equipe_padrao, a.equipe_max, a.duracao_fixa_dias) == ("propria", 2, 6, None)
+    assert (a.execucao_padrao, a.equipe_padrao, a.equipe_max, a.duracao_fixa_dias) == ("propria", 2, 20, None)
 
 
 def test_biblioteca_valida_colunas_novas(tmp_path):
@@ -61,6 +61,7 @@ def test_biblioteca_valida_colunas_novas(tmp_path):
         cab = [c.value for c in ws[1]]
         ws.cell(16, cab.index("execucao_padrao") + 1).value = "talvez"
         ws.cell(16, cab.index("equipe_padrao") + 1).value = 9
+        ws.cell(16, cab.index("equipe_max") + 1).value = 6
         ws.cell(17, cab.index("duracao_fixa_dias") + 1).value = "três"
 
     with pytest.raises(ErroBiblioteca) as exc:
@@ -129,20 +130,21 @@ def test_item_4_5_ajudante_vira_servente(analise_por_item):
 
 
 def test_item_9_1_1_1(analise_por_item):
-    assert _h(analise_por_item["9.1.1.1"]) == {"Eletricista": pytest.approx(0.029),
-                                                "Auxiliar de eletricista": pytest.approx(0.029)}
+    # auxiliar de eletricista agora é Servente (funções da empresa)
+    assert _h(analise_por_item["9.1.1.1"]) == {"Eletricista": pytest.approx(0.029), "Servente": pytest.approx(0.029)}
 
 
 def test_item_5_1_14_expande_subcomposicoes(analise_por_item):
     a = analise_por_item["5.1.14"]
     h = _h(a)
-    assert h["Pedreiro"] == pytest.approx(6.1654, abs=0.001)
-    assert h["Servente"] == pytest.approx(3.4437, abs=0.001)
-    assert h["Armador"] == pytest.approx(0.5027, abs=0.001)
-    expandidos = {e["codigo"]: e["item"] for e in a["expandidos"]}
+    comp = _h({"horas": [x for x in a["horas"] if x["origem"] == "composicao"]})
+    assert comp["Pedreiro"] == pytest.approx(6.1654, abs=0.001)
+    assert comp["Servente"] == pytest.approx(3.4437, abs=0.001)
+    assert comp["Armador"] == pytest.approx(0.5027, abs=0.001)
+    expandidos = {e["codigo"]: e["item"] for e in a["expandidos"] if not e.get("referencia")}
     assert expandidos == {"92761": "6.8", "92762": "5.1.4", "87529": "14.4", "COMP-07": "6.12"}
     pendentes = {str(p["codigo"]) for p in a["pendentes"]}
-    assert {"ED-48202", "87893", "101963"} <= pendentes
+    assert "ED-48202" in pendentes and not {"87893", "101963"} & pendentes  # agora vêm da referência
 
 
 def test_item_1_5_1_equipe_indireta(analise_por_item):

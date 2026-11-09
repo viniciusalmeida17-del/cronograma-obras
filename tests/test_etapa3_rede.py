@@ -71,16 +71,18 @@ def test_toda_atividade_tem_sucessor_ou_liga_ao_fim(rede):
 
 
 def test_dependencias_da_biblioteca_com_espera(rede):
-    assert dependencias_de(rede, "FUN-05") == [Dependencia("FUN-04", 3)]
+    assert dependencias_de(rede, "FUN-05") == [Dependencia("FUN-04", 3, "II", "du")]
     assert set(map(str, dependencias_de(rede, "QUA-03"))) == {"QUA-02+28d", "COB-02"}
-    assert set(map(str, dependencias_de(rede, "PIN-01"))) == {"REV-02+28d", "REV-03"}
+    assert set(map(str, dependencias_de(rede, "PIN-01"))) == {"REV-02:II+20du", "REV-03"}
+    # só a REV-01 espera a cura (EST-03); o resto segue em paralelo
+    assert {d["atividade"] for d in rede["dependencias"] if d["depende_de"] == "EST-03"} == {"REV-01"}
 
 
 def test_remocao_com_heranca_fun01(biblioteca, servicos_ligados):
     servicos = [s for s in servicos_ligados if s["atividade_biblioteca"] != "FUN-01"]
     r = montar_rede(biblioteca, servicos)
     assert "FUN-01" not in r["atividades"]
-    assert dependencias_de(r, "FUN-02") == [Dependencia("LOC-01", 0)]
+    assert dependencias_de(r, "FUN-02") == [Dependencia("LOC-01", 4, "II", "du")]  # II+2du + II+2du
     origem = {d["origem"] for d in r["dependencias"] if d["atividade"] == "FUN-02"}
     assert origem == {"herdada"}
     assert len(r["atividades"]) == 79
@@ -90,16 +92,16 @@ def test_espera_herdada_fun04(biblioteca, servicos_ligados):
     servicos = [s for s in servicos_ligados if s["atividade_biblioteca"] != "FUN-04"]
     r = montar_rede(biblioteca, servicos)
     assert "FUN-04" not in r["atividades"]
-    assert dependencias_de(r, "FUN-05") == [Dependencia("FUN-03", 3)]
-    assert dependencias_de(r, "EST-01") == [Dependencia("FUN-03", 0)]
+    assert dependencias_de(r, "FUN-05") == [Dependencia("FUN-03", 8, "II", "du")]
+    assert dependencias_de(r, "EST-01") == [Dependencia("FUN-03", 10, "II", "du")]
     assert achar_ciclo(_grafo(r)) is None
 
 
 def test_espera_soma_em_cadeia(biblioteca, servicos_ligados):
     """B depende de A+x e A (sai) depende de C+y → B depende de C+(x+y)."""
-    tirar = {"REV-02"}  # REV-02 depende de REV-01+3d; REV-03 depende de REV-02+14d
+    tirar = {"REV-02"}  # REV-02 depende de REV-01:II+3du; REV-03 depende de REV-02:II+10du
     r = montar_rede(biblioteca, [s for s in servicos_ligados if s["atividade_biblioteca"] not in tirar])
-    assert Dependencia("REV-01", 17) in dependencias_de(r, "REV-03")
+    assert Dependencia("REV-01", 13, "II", "du") in dependencias_de(r, "REV-03")
 
 
 def test_sem_custo_so_entra_com_dependencias(biblioteca, servicos_ligados):
@@ -107,8 +109,10 @@ def test_sem_custo_so_entra_com_dependencias(biblioteca, servicos_ligados):
     r = montar_rede(biblioteca, servicos)
     assert "HID-02" not in r["atividades"] and "HID-03" not in r["atividades"]
     assert "TES-01" in r["atividades"] and "EST-03" in r["atividades"]
-    # REV-01 dependia de HID-03, que dependia de HID-02, que dependia de ALV-02
-    assert Dependencia("ALV-02", 0) in dependencias_de(r, "REV-01")
+    # REV-01 dependia de HID-02:II+5du, que dependia de ALV-02:II+5du → ALV-02:II+10du
+    assert Dependencia("ALV-02", 10, "II", "du") in dependencias_de(r, "REV-01")
+    # REV-02 dependia de HID-03 (TI) → HID-02 (TI) → ALV-02:II+5du; o elo de quem fica é TI
+    assert Dependencia("ALV-02", 5, "TI", "du") in dependencias_de(r, "REV-02")
 
 
 def test_tes01_entra_sempre(biblioteca, servicos_ligados):
@@ -163,3 +167,19 @@ def test_editar_recusa_ciclo(rede):
 def test_editar_recusa_invalidos(rede, codigo, kwargs):
     with pytest.raises(ErroRede):
         editar_atividade(rede, codigo, **kwargs)
+
+
+def test_heranca_tira_fun03(biblioteca, servicos_ligados):
+    """Tirar a FUN-03: FUN-04 (FUN-03:II+5du) herda FUN-02:II+3du → FUN-02:II+8du."""
+    r = montar_rede(biblioteca, [s for s in servicos_ligados if s["atividade_biblioteca"] != "FUN-03"])
+    assert dependencias_de(r, "FUN-04") == [Dependencia("FUN-02", 8, "II", "du")]
+    assert str(dependencias_de(r, "FUN-04")[0]) == "FUN-02:II+8du"
+
+
+def test_heranca_converte_unidades():
+    from atividades.biblioteca import Dependencia as D
+    from atividades.rede import somar_elos
+
+    assert somar_elos(D("A", 3, "II", "du"), D("C", 7, "TI", "d"), "C") == D("C", 8, "II", "du")  # 7d → 5du
+    assert somar_elos(D("A", 3), D("C", 4), "C") == D("C", 7)
+    assert somar_elos(D("A", 0), D("C", 2, "II", "du"), "C") == D("C", 2, "TI", "du")

@@ -9,16 +9,16 @@ from armazenamento import Banco
 from atividades.biblioteca import Biblioteca
 
 from .analise import COMPOSICAO, ESTIMADO, MANUAL, Analisador, chave_codigo, mapa_codigo_item
-from .calculo import EQUIPE_MAX, EQUIPE_PADRAO, EXECUCOES, INDIRETA, PERGUNTAR, calcular_obra
+from .calculo import EQUIPE_MAX, EQUIPE_PADRAO, EXECUCOES, INDIRETA, PERGUNTAR, TERCEIRIZADA, calcular_obra
 from .composicoes import ler_composicoes
-from .funcoes import TabelaFuncoes, carregar_funcoes, carregar_palavras_subcomposicao
+from .funcoes import TabelaFuncoes, carregar_funcoes, carregar_palavras_subcomposicao, carregar_referencias
 
 
 class ErroMaoDeObra(Exception):
     pass
 
 
-CAMPOS_NOVOS = ("execucao_padrao", "equipe_padrao", "equipe_max", "duracao_fixa_dias")
+CAMPOS_NOVOS = ("execucao_padrao", "equipe_padrao", "equipe_max", "duracao_fixa_dias", "tipo_producao")
 
 
 def _obra(banco: Banco, obra_id: int) -> dict[str, Any]:
@@ -63,7 +63,8 @@ def analisar_obra(
 
     lidas = ler_composicoes(arquivo, dados["obra"].get("aba"))
     servicos = dados["servicos"]
-    analisador = Analisador(lidas.composicoes, funcoes, palavras, mapa_codigo_item(servicos), banco.consulta_coeficientes())
+    analisador = Analisador(lidas.composicoes, funcoes, palavras, mapa_codigo_item(servicos), banco.consulta_coeficientes(),
+                            carregar_referencias(funcoes))
     manuais = banco.horas_manuais(obra_id)
     analises = {s["id"]: analisador.analisar_servico(s, manuais.get(s["id"])) for s in servicos}
     banco.gravar_analises(obra_id, analises)
@@ -97,10 +98,23 @@ def estado_mao_de_obra(banco: Banco, obra_id: int, biblioteca: Biblioteca | None
     analises = banco.carregar_analises(obra_id)
     if not analises:
         raise ErroMaoDeObra("A mão de obra desta obra ainda não foi calculada.")
+    tabela = carregar_funcoes()
+    conhecidas = set(tabela.funcoes())
+    if any(h["funcao"] not in conhecidas and h["origem"] != MANUAL for a in analises.values() for h in a["horas"]) \
+            and banco.arquivo_da_obra(obra_id) and not _reprocessando.get(obra_id):
+        # a tabela de funções mudou (ex.: "Auxiliar de eletricista" deixou de existir): reprocessa a obra
+        _reprocessando[obra_id] = True
+        try:
+            return analisar_obra(banco, obra_id, biblioteca, tabela)
+        finally:
+            _reprocessando.pop(obra_id, None)
     atividades = atividades_da_obra(banco, obra_id, biblioteca)
     execucao = banco.carregar_execucao(obra_id)
     parametros = banco.carregar_parametros(obra_id)
+    if parametros.get("juntar") is None:
+        parametros["juntar"] = dict(tabela.juntar_padrao)
     obra = dados["obra"]
+    producoes = aplicar_producao(banco, dados["servicos"], atividades, execucao)
     resultado = calcular_obra(dados["servicos"], analises, atividades, execucao, parametros,
                               (obra.get("prazo_valor"), obra.get("prazo_unidade")))
     banco.gravar_estimativas(analises)
@@ -143,7 +157,49 @@ def estado_mao_de_obra(banco: Banco, obra_id: int, biblioteca: Biblioteca | None
     resultado["funcoes_conhecidas"] = sorted({h["funcao"] for a in analises.values() for h in a["horas"]}
                                              | {f for a in resultado["atividades"] for f in a["horas_brutas"]})
     resultado["pode_seguir"] = not resultado["pendencias"]
+    resultado["producao"] = producoes
+    resultado["juntar"] = {"possivel": tabela.juntar_possivel, "padrao": tabela.juntar_padrao,
+                           "obra": parametros["juntar"]}
     return resultado
+
+
+_reprocessando: dict[int, bool] = {}
+
+
+def quantidade_principal(servicos: Iterable[dict[str, Any]], codigo: str) -> tuple[float, str | None]:
+    """Quantidade da atividade na unidade de maior valor (ex.: m³ da terraplenagem, m² do piso)."""
+    por_un: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0])
+    for s in servicos:
+        if s.get("atividade_biblioteca") == codigo and s.get("unidade"):
+            por_un[s["unidade"]][0] += s.get("quantidade") or 0.0
+            por_un[s["unidade"]][1] += s.get("total") or 0.0
+    if not por_un:
+        return 0.0, None
+    un = max(por_un, key=lambda u: por_un[u][1])
+    return por_un[un][0], un
+
+
+def aplicar_producao(banco: Banco, servicos: list[dict[str, Any]], atividades: dict[str, dict[str, Any]],
+                     execucao: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Terceirizadas com produção por dia: duração = teto(quantidade ÷ produção). Usa o padrão de outras obras."""
+    import math
+
+    padroes = banco.producao_padrao()
+    res = {}
+    for cod, a in atividades.items():
+        ex = execucao.get(cod) or {}
+        if a["tipo"] == INDIRETA or ex.get("execucao") != TERCEIRIZADA:
+            continue
+        qtd, un = quantidade_principal(servicos, cod)
+        prod, origem = ex.get("producao_dia"), "obra"
+        if not prod and cod in padroes and not ex.get("duracao_manual"):
+            prod, origem = padroes[cod]["producao_dia"], "padrao"
+        res[cod] = {"quantidade": round(qtd, 4), "unidade": un, "producao_dia": prod, "origem": origem if prod else None}
+        if prod and qtd > 0:
+            dias = max(1, math.ceil(round(qtd / prod, 6)))
+            res[cod]["dias"] = dias
+            execucao.setdefault(cod, {})["duracao_manual"] = dias
+    return res
 
 
 def _json(texto: Any) -> Any:
@@ -161,7 +217,7 @@ _RE_DATA = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 def salvar_parametros(banco: Banco, obra_id: int, dados: dict[str, Any]) -> None:
     atual = banco.carregar_parametros(obra_id)
-    p = {**atual, **{k: v for k, v in dados.items() if k in atual}}
+    p = {**atual, **{k: v for k, v in dados.items() if k in atual and k != "juntar"}}
     try:
         p["horas_semana"] = float(p["horas_semana"])
         p["dias_semana"] = int(p["dias_semana"])
@@ -189,6 +245,23 @@ def salvar_parametros(banco: Banco, obra_id: int, dados: dict[str, Any]) -> None
             raise ErroMaoDeObra(f"Horas por semana inválidas na mudança de jornada de {data}.")
         mudancas.append({"a_partir_de": data, "horas_semana": horas})
     p["mudancas_jornada"] = sorted(mudancas, key=lambda m: m["a_partir_de"])
+    for campo, nome in (("volume_caminhao", "Volume por caminhão (m³)"), ("caminhoes_dia", "Caminhões de concreto por dia")):
+        try:
+            p[campo] = float(str(p.get(campo)).replace(",", "."))
+        except (TypeError, ValueError):
+            raise ErroMaoDeObra(f"{nome} inválido.")
+        if not 0 < p[campo] <= 100:
+            raise ErroMaoDeObra(f"{nome} deve ser maior que zero.")
+    if "juntar" in dados:
+        possivel = carregar_funcoes().juntar_possivel
+        juntar = {}
+        for f, destino in (dados["juntar"] or {}).items():
+            if not destino:
+                continue
+            if possivel.get(f) != destino:
+                raise ErroMaoDeObra(f"{f} não pode ser juntada com {destino} (veja a aba Juntar funções da funcoes.xlsx).")
+            juntar[f] = destino
+        p["juntar"] = juntar
     banco.salvar_parametros(obra_id, p)
 
 
@@ -209,7 +282,7 @@ MAQUINAS_MAX = 20
 
 def definir_atividade(banco: Banco, obra_id: int, codigo: str, rendimento: Any = _NADA, equipe_padrao: Any = _NADA,
                       duracao_manual: Any = _NADA, biblioteca: Biblioteca | None = None,
-                      maquinas: dict[str, Any] | None = None) -> None:
+                      maquinas: dict[str, Any] | None = None, producao_dia: Any = _NADA) -> None:
     """Rendimento específico, equipe padrão, duração manual (None limpa) e máquinas por equipamento da atividade."""
     atividades = atividades_da_obra(banco, obra_id, biblioteca)
     if codigo not in atividades or atividades[codigo]["tipo"] == INDIRETA:
@@ -241,6 +314,7 @@ def definir_atividade(banco: Banco, obra_id: int, codigo: str, rendimento: Any =
             if d <= 0 or d != int(d):
                 raise ErroMaoDeObra("A duração deve ser um número inteiro de dias úteis, maior que zero.")
             campos["duracao_manual"] = int(d)
+            campos["producao_dia"] = None
     quantidades: dict[str, int] = {}
     for equip, n in (maquinas or {}).items():
         try:
@@ -250,6 +324,20 @@ def definir_atividade(banco: Banco, obra_id: int, codigo: str, rendimento: Any =
         if v != int(v) or not 1 <= v <= MAQUINAS_MAX:
             raise ErroMaoDeObra(f"Quantidade de máquinas de {equip} deve ser um número inteiro entre 1 e {MAQUINAS_MAX}.")
         quantidades[str(equip)] = int(v)
+    if producao_dia is not _NADA:
+        if producao_dia in (None, ""):
+            campos["producao_dia"] = None
+        else:
+            try:
+                prod = float(str(producao_dia).replace(",", "."))
+            except ValueError:
+                raise ErroMaoDeObra("Produção por dia inválida.")
+            if prod <= 0:
+                raise ErroMaoDeObra("A produção por dia deve ser maior que zero.")
+            campos["producao_dia"] = prod
+            campos["duracao_manual"] = None
+            _, un = quantidade_principal(_obra(banco, obra_id)["servicos"], codigo)
+            banco.lembrar_producao(codigo, prod, un)
     banco.atualizar_execucao(obra_id, codigo, **campos)
     if quantidades:
         banco.gravar_maquinas(obra_id, codigo, quantidades)
@@ -296,3 +384,30 @@ def definir_horas_subcomposicao(banco: Banco, obra_id: int, codigo: str, horas: 
         raise ErroMaoDeObra("Informe as horas de pelo menos uma função.")
     banco.gravar_coeficientes("", codigo, limpas, "manual", obra_id, descricao)
     return analisar_obra(banco, obra_id, biblioteca)
+
+
+def importar_sinapi(banco: Banco, caminho: str, mapeamento: dict[str, int] | None = None, aba: str | None = None,
+                    linha_cabecalho: int | None = None, reprocessar: bool = True,
+                    biblioteca: Biblioteca | None = None) -> dict[str, Any]:
+    """Importa a tabela analítica do SINAPI para o banco de coeficientes (base SINAPI) e reprocessa as obras."""
+    from .sinapi import ROTULOS_SINAPI, ler_sinapi
+
+    res = ler_sinapi(caminho, carregar_funcoes(), mapeamento, aba, linha_cabecalho)
+    saida: dict[str, Any] = {"aba": res.aba, "linha_cabecalho": res.linha_cabecalho, "cabecalho": res.cabecalho,
+                             "mapeamento": res.mapeamento, "faltando": res.faltando, "rotulos": ROTULOS_SINAPI,
+                             "precisa_mapeamento": res.precisa_mapeamento}
+    if res.precisa_mapeamento:
+        return saida
+    n = banco.gravar_coeficientes_lote("SINAPI", res.composicoes, "sinapi", f"SINAPI importado ({res.aba})")
+    saida.update(composicoes_lidas=res.n_composicoes_lidas, composicoes_com_mao_de_obra=n, linhas=res.n_linhas)
+    reprocessadas = []
+    if reprocessar:
+        for o in banco.listar_obras():
+            if banco.carregar_analises(o["id"]) and banco.arquivo_da_obra(o["id"]):
+                try:
+                    analisar_obra(banco, o["id"], biblioteca)
+                    reprocessadas.append(o["id"])
+                except ErroMaoDeObra:
+                    pass
+    saida["obras_reprocessadas"] = reprocessadas
+    return saida

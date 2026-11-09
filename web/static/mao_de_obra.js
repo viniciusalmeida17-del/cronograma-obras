@@ -6,6 +6,7 @@ const ORIGENS = {
   composicao: { rotulo: "composição", cor: "#2f6fb5" },
   banco: { rotulo: "banco", cor: "#6b8fc7" },
   manual: { rotulo: "manual", cor: "#2e8b57" },
+  referencia: { rotulo: "referência", cor: "#1baf7a" },
   estimado: { rotulo: "estimado", cor: "#e0b000" },
   sem_mao_de_obra: { rotulo: "sem mão de obra", cor: "#c8cdd4" },
 };
@@ -87,6 +88,12 @@ function desenharParametros() {
   f.horas_semana.value = p.horas_semana;
   f.dias_semana.value = String(p.dias_semana);
   f.rendimento.value = Math.round(p.rendimento * 1000) / 10;
+  f.volume_caminhao.value = p.volume_caminhao;
+  f.caminhoes_dia.value = p.caminhoes_dia;
+  const j = est.d.juntar || { possivel: {}, obra: {} };
+  $("#lista-juntar").innerHTML = Object.entries(j.possivel).map(([fn, destino]) => `<label class="inline">
+      <input type="checkbox" name="juntar" data-funcao="${esc(fn)}" data-destino="${esc(destino)}" ${j.obra && j.obra[fn] ? "checked" : ""}>
+      ${esc(fn)} → ${esc(destino)}</label>`).join("") || '<p class="discreto">A tabela de funções não tem a aba Juntar funções.</p>';
   $("#horas-dia").textContent = fmtH4.format(p.horas_por_dia) + " h";
   const o = est.d.obra;
   $("#prazo-licitacao").textContent = o.prazo_valor ? `${fmtH4.format(o.prazo_valor)} ${o.prazo_unidade || ""} (${fmtH.format(est.d.semanas_prazo || 0)} semanas)` : "—";
@@ -110,6 +117,8 @@ $("#form-parametros").addEventListener("submit", (e) => {
   chamar(`/api/obras/${obraId}/parametros`, { json: {
     horas_semana: f.horas_semana.value, dias_semana: f.dias_semana.value,
     rendimento: Number(f.rendimento.value) / 100, mudancas_jornada: mudancas,
+    volume_caminhao: f.volume_caminhao.value, caminhoes_dia: f.caminhoes_dia.value,
+    juntar: Object.fromEntries($$("[name=juntar]", f).filter((i) => i.checked).map((i) => [i.dataset.funcao, i.dataset.destino])),
   } }, $("#msg-parametros"), "Parâmetros salvos; durações recalculadas.");
 });
 
@@ -203,10 +212,16 @@ function detalheAtividade(a, servs) {
       </fieldset>` : ""}
       <label>Duração manual (dias úteis)
         <input type="number" name="duracao_manual" min="1" step="1" value="${a.duracao_manual ?? ""}" placeholder="${a.duracao && a.duracao.tipo !== "manual" ? a.duracao.dias : "obrigatória"}"></label>
+      ${a.execucao === "terceirizada" ? (() => {
+        const pr = (est.d.producao || {})[a.codigo] || {};
+        return `<label>ou produção por dia (${esc(pr.unidade || "un")}/dia)
+          <input type="number" name="producao_dia" min="0.01" step="any" value="${pr.producao_dia ?? ""}" placeholder="ex.: 150">
+          <small>${pr.quantidade ? `${fmtH4.format(pr.quantidade)} ${esc(pr.unidade || "")}` : ""}${pr.dias ? ` → ${pr.dias} dias úteis` : ""}${pr.origem === "padrao" ? " (padrão de outra obra)" : ""}</small></label>`;
+      })() : ""}
       <button type="submit" class="primario">Aplicar</button>
       <p class="mensagem msg-ativ"></p>
     </form>
-    <p class="discreto">Equipe padrão: ${equipe}${maquinas ? `<br>Equipamentos: ${maquinas}` : ""}${c ? `<br>Duração exata ${fmtH.format(c.dias_exatos)} dias (limitada por ${c.limitante === "equipamento" ? "equipamento" : "mão de obra"})` : ""}${a.duracao_fixa_dias ? `<br>Duração fixa da biblioteca: ${a.duracao_fixa_dias} dias corridos` : ""}</p>
+    <p class="discreto">Equipe padrão: ${equipe}${maquinas ? `<br>Equipamentos: ${maquinas}` : ""}${c ? `<br>Duração exata ${fmtH.format(c.dias_exatos)} dias (limitada por ${{ equipamento: "equipamento", concretagem: `concretagem: ${fmtH.format(a.volume_m3 || 0)} m³` }[c.limitante] || "mão de obra"})` : ""}${a.duracao_fixa_dias ? `<br>Duração fixa da biblioteca: ${a.duracao_fixa_dias} dias corridos` : ""}</p>
     <table class="servicos"><thead><tr><th>Item</th><th class="desc">Serviço</th><th class="num">Quant.</th><th>Origem</th><th>Horas por função (h/un → total)</th><th></th></tr></thead><tbody>
     ${servs.map(linhaServico).join("")}
     </tbody></table>
@@ -230,7 +245,7 @@ function linhaServico(s) {
     <td class="nowrap">${esc(s.item)}<span class="linha-excel">linha ${s.linha_excel}</span></td>
     <td class="desc">${esc(s.descricao)}<span class="linha-excel">${esc(s.base || "")} ${esc(s.codigo || "")}</span>${pend}</td>
     <td class="num">${fmtH4.format(s.quantidade || 0)} ${esc(s.unidade)}</td>
-    <td><span class="selo-origem ${s.origem}">${ORIGENS[s.origem]?.rotulo}</span>${s.estimativa ? `<small class="discreto"><br>razão da ${s.estimativa.nivel}</small>` : ""}</td>
+    <td><span class="selo-origem ${s.origem}">${ORIGENS[s.origem]?.rotulo}</span>${s.estimativa ? `<small class="discreto"><br>razão da ${s.estimativa.nivel}</small>` : ""}${s.estimativa?.limitada ? `<br><span class="limitada" title="Sem o limite: ${horas(s.estimativa.horas_sem_limite)} h">estimativa limitada, revisar</span>` : ""}</td>
     <td class="horas-servico">${htmlHoras}</td>
     <td><button type="button" class="secundario pequeno" data-servico="${s.id}">Digitar h/un</button></td>
   </tr>`;
@@ -256,8 +271,13 @@ $("#tabela-atividades").addEventListener("submit", (e) => {
   e.preventDefault();
   const maquinas = {};
   $$("[name=maquina]", f).forEach((i) => { maquinas[i.dataset.equip] = i.value; });
+  const extra = {};
+  if (f.producao_dia && f.producao_dia.value !== String(((est.d.producao || {})[f.dataset.codigo] || {}).producao_dia ?? "")) {
+    extra.producao_dia = f.producao_dia.value;
+  }
   chamar(`/api/obras/${obraId}/atividade/${f.dataset.codigo}`, { json: {
-    equipe_padrao: f.equipe_padrao.value, rendimento: f.rendimento.value, duracao_manual: f.duracao_manual.value, maquinas,
+    ...extra,
+    equipe_padrao: f.equipe_padrao.value, rendimento: f.rendimento.value, duracao_manual: extra.producao_dia ? undefined : f.duracao_manual.value, maquinas,
   } }, $(".msg-ativ", f), "").then((ok) => {
     // a tabela é redesenhada (o formulário some e volta): a confirmação vai para o topo; erros ficam no formulário
     if (ok) mensagem($("#msg-geral"), `${f.dataset.codigo} atualizada: duração recalculada.`, "ok");

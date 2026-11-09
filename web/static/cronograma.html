@@ -19,6 +19,7 @@
     <div class="cartao">
       <h2 id="nome-obra"></h2>
       <div id="faixa" class="faixa"></div>
+      <ul id="avisos-custos" class="avisos-custos"></ul>
       <div class="acoes-linha">
         <a id="link-mao-de-obra" class="botao">← Mão de obra e duração</a>
         <span class="espaco"></span>
@@ -36,12 +37,16 @@
     <!-- 1. Parâmetros -->
     <section class="cartao aba" id="aba-parametros" hidden>
       <form id="form-parametros" class="grade-parametros">
-        <label>Data de início da obra <input type="date" name="data_inicio" required></label>
+        <label>Data de início da obra <input type="date" name="data_inicio" required>
+          <small>Obrigatória, sem valor padrão (para não gerar cronograma com datas passadas por engano).</small></label>
         <label>Limite das rígidas (dias úteis) <input type="number" name="limite_rigidas" min="0" max="60" step="1">
           <small>A rígida começa até este número de dias úteis depois de liberada.</small></label>
         <label>Tempo limite por cenário (s) <input type="number" name="tempo_limite" min="5" max="3600" step="5"></label>
         <label>Máximo de pessoas no canteiro <input type="number" name="max_pessoas_total" min="1" step="1" placeholder="sem limite">
           <small>Opcional: soma dos próprios de todas as funções.</small></label>
+        <label>Máquinas de cada equipamento (máx.) <input type="number" name="maquinas_max" min="1" max="50" step="1">
+          <small>O otimizador escolhe de 1 até este número (padrão 6); dá para mudar por atividade abaixo. Em atividade própria, cada máquina traz 1 operador/motorista.</small></label>
+        <label class="inline"><input type="checkbox" name="dividir_terceirizadas"> Terceirizadas podem ser feitas em até 3 partes (mínimo de 5 dias úteis cada)</label>
         <div class="info-parametros largo">
           <div><span class="discreto">Dias de trabalho por semana</span> <b id="info-dias"></b></div>
           <div><span class="discreto">Jornada</span> <b id="info-jornada"></b></div>
@@ -53,28 +58,58 @@
           <button type="button" class="secundario pequeno" id="btn-add-feriado">+ Acrescentar feriado</button>
         </fieldset>
         <fieldset class="largo">
-          <legend>Custo por hora das funções (com encargos) e máximo de pessoas</legend>
-          <p class="discreto">Valor inicial: média das composições, ponderada pelas horas. O valor salvo vale para esta obra e vira o padrão da próxima.</p>
-          <table class="simples"><thead><tr><th>Função</th><th class="num">R$/h</th><th>Origem</th><th class="num">Composições</th><th class="num">Máximo (opcional)</th></tr></thead>
-            <tbody id="tabela-custos"></tbody></table>
+          <legend>Mão de obra própria: custo real da empresa</legend>
+          <div class="acoes-linha">
+            <label>Encargos sobre o salário (%) <input type="number" name="encargos" min="0" max="300" step="0.5"></label>
+            <label>Redução mínima de quem sai e volta (semanas) <input type="number" name="min_semanas_reducao" min="1" max="12" step="1"></label>
+            <label>Custo por pessoa que sai ou entra (R$) <input type="number" name="custo_troca" min="0" step="1"></label>
+          </div>
+          <p class="discreto">Custo por hora = salário × (1 + encargos) ÷ (horas por semana × 4,33). Sem salário, vale o custo das composições da licitação (referência, não o real).
+            "Pode sair e voltar": a função pode ser transferida para outra obra num vale de serviço (padrão: Servente e Pedreiro); as outras só sobem até um pico e depois descem.</p>
+          <div class="rolagem"><table class="simples"><thead><tr><th>Função</th><th class="num">Salário mensal (R$)</th><th class="num">Custo por hora</th><th>Origem</th>
+            <th class="num">Composições</th><th>Pode sair e voltar</th><th class="num">Máximo (opcional)</th></tr></thead>
+            <tbody id="tabela-custos"></tbody></table></div>
+        </fieldset>
+        <fieldset class="largo">
+          <legend>Indiretos reais por mês (custo que varia com o prazo)</legend>
+          <p class="discreto" id="info-indiretos"></p>
+          <table class="simples"><thead><tr><th>Descrição</th><th class="num">R$ por mês</th><th>De</th><th>Até</th><th></th></tr></thead>
+            <tbody id="tabela-indiretos-reais"></tbody></table>
+          <div class="acoes-linha">
+            <button type="button" class="secundario pequeno" id="btn-add-indireto">+ Acrescentar</button>
+            <button type="button" class="secundario pequeno" id="btn-indiretos-planilha">Voltar aos valores da planilha</button>
+          </div>
+        </fieldset>
+        <fieldset class="largo">
+          <legend>Terceirizados: valor contratado (custo fixo, não muda com o prazo)</legend>
+          <table class="simples"><thead><tr><th>Atividade</th><th class="num">Planilha sem BDI</th><th class="num">Valor contratado (R$)</th></tr></thead>
+            <tbody id="tabela-terceirizados"></tbody></table>
+        </fieldset>
+        <fieldset class="largo">
+          <legend>Indiretas da planilha: critério de pagamento (receita)</legend>
+          <p class="discreto">Proporcional à execução: a receita é a mesma mesmo se a obra terminar antes. Mensal: paga por mês enquanto a obra durar (terminar antes recebe menos). Fixo: valor único.</p>
+          <div class="rolagem"><table class="simples"><thead><tr><th>Item</th><th>Unidade</th><th class="num">Valor (sem BDI)</th><th>Critério</th></tr></thead>
+            <tbody id="tabela-criterios"></tbody></table></div>
         </fieldset>
         <div class="largo acoes-linha"><span class="espaco"></span><p id="msg-parametros" class="mensagem"></p><button type="submit" class="primario">Salvar parâmetros</button></div>
       </form>
-      <h3>Travar o tamanho da equipe</h3>
-      <p class="discreto">Atividade travada tem um modo só (ex.: "fundação sempre com 3 armadores"). Sem trava, o otimizador escolhe de 1 até a equipe máxima.</p>
-      <div class="rolagem"><table class="simples" id="tabela-travas"><thead><tr><th>Atividade</th><th>Função principal</th><th class="num">Padrão</th><th class="num">Máxima</th><th>Equipe travada</th></tr></thead><tbody></tbody></table></div>
+      <h3>Equipes e máquinas por atividade</h3>
+      <p class="discreto">Equipe travada: um modo só (ex.: "fundação sempre com 3 pedreiros"). Sem trava, o otimizador testa 1, 2, 3, 4, 5, 6, 8, 10, 12, 15 e 20 até a equipe máxima.</p>
+      <div class="rolagem"><table class="simples" id="tabela-travas"><thead><tr><th>Atividade</th><th>Execução</th><th>Função principal</th><th class="num">Padrão</th>
+        <th class="num">Equipe máxima</th><th>Equipe travada</th><th class="num">Máquinas (máx.)</th></tr></thead><tbody></tbody></table></div>
       <p id="msg-travas" class="mensagem"></p>
     </section>
 
     <!-- 2. Cenários -->
     <section class="cartao aba" id="aba-cenarios" hidden>
       <form id="form-calcular" class="acoes-linha">
-        <label>Prazos a comparar (meses) <input type="text" name="prazos" size="22" placeholder="ex.: 9; 10; 11; 12"></label>
+        <label>Prazos a comparar (meses, até o da licitação) <input type="text" name="prazos" size="22" placeholder="ex.: 9; 10; 11; 12"></label>
         <label>Tempo limite por cenário (s) <input type="number" name="tempo_limite" min="5" max="3600" step="5"></label>
         <button type="submit" class="primario" id="btn-calcular">Calcular</button>
         <button type="button" class="secundario" id="btn-parar" hidden>Parar</button>
         <span class="espaco"></span>
       </form>
+      <p class="discreto">O cenário do prazo da licitação é o <b>principal</b> e é sempre calculado. Prazos maiores não entram: lucro só interessa dentro do prazo.</p>
       <div id="progresso" hidden>
         <div class="barra grande"><span id="progresso-barra" style="width:0%; background:#2a78d6"></span></div>
         <p id="progresso-texto" class="discreto"></p>
@@ -83,23 +118,33 @@
       <div class="rolagem">
         <table class="simples comparacao" id="tabela-cenarios">
           <thead><tr>
-            <th>Prazo do cenário</th><th>Término previsto</th><th class="num">Pico de pessoas</th><th class="num">Homem-semana pago</th>
-            <th class="num">Ociosidade</th><th class="num">Mão de obra própria</th><th class="num">Indiretos por tempo</th>
-            <th class="num">Total que varia com o prazo</th><th class="num">Diferença p/ licitação</th><th>Situação</th>
+            <th>Prazo / término</th><th class="num">Pico de pessoas</th><th class="num">Homem-semana pago</th>
+            <th class="num">Ociosidade</th><th class="num">Receita que varia com o prazo</th><th class="num">Custo real que varia com o prazo</th>
+            <th class="num">Resultado</th><th class="num">Diferença p/ o principal</th><th>Situação</th>
           </tr></thead>
           <tbody></tbody>
         </table>
       </div>
-      <p class="discreto">Diferença positiva = economia em relação ao prazo da licitação. Indiretos por tempo: itens em MÊS, pelo período real
-        (obra toda: valor ÷ prazo da licitação por mês; entre atividades: valor ÷ quantidade por mês).</p>
+      <p class="discreto"><b>Resultado da parte que varia com o prazo</b>, não o lucro total da obra: receita = indiretas com critério mensal;
+        custo = mão de obra própria paga (inclusive parada) + indiretos reais por mês × duração. Materiais e terceirizados entram na etapa de custos.
+        Diferença positiva = melhor que o cenário principal.</p>
+      <div id="diagnostico"></div>
     </section>
 
     <!-- 3. Gantt -->
     <section class="cartao aba" id="aba-gantt" hidden>
-      <div class="acoes-linha"><label>Cenário <select class="sel-cenario"></select></label><span class="espaco"></span>
-        <div class="legenda" id="legenda-gantt"></div></div>
+      <div class="acoes-linha barra-gantt">
+        <label>Cenário <select class="sel-cenario"></select></label>
+        <div class="alternar" id="escala-gantt">
+          <button type="button" data-escala="dia">Dia</button><button type="button" data-escala="semana" class="ativo">Semana</button><button type="button" data-escala="mes">Mês</button>
+        </div>
+        <label class="inline"><input type="checkbox" id="ver-setas"> Setas de dependência</label>
+        <label class="inline"><input type="checkbox" id="so-critico"> Só o caminho crítico</label>
+        <button type="button" class="secundario pequeno" id="btn-abrir-grupos">Abrir/fechar todas as etapas</button>
+        <span class="espaco"></span>
+      </div>
+      <div class="legenda" id="legenda-gantt"></div>
       <div id="gantt" class="gantt"></div>
-      <div id="dica" class="dica" hidden></div>
     </section>
 
     <!-- 4. Equipe por semana -->
@@ -109,6 +154,9 @@
       <h3>Pessoas contratadas por semana (próprios)</h3>
       <div class="legenda" id="legenda-equipe"></div>
       <div id="grafico-equipe" class="grafico-equipe"></div>
+      <h3>Ociosidade por função</h3>
+      <p class="discreto">Ociosidade = horas pagas sem serviço ÷ horas pagas, sem contar feriados (eles ficam na coluna à parte).</p>
+      <div class="rolagem"><table class="simples" id="tabela-ociosidade"></table></div>
       <h3>Semana × função</h3>
       <div class="rolagem"><table class="simples equipe-semana" id="tabela-equipe"></table></div>
     </section>
@@ -118,11 +166,16 @@
       <div class="cartao">
         <div class="acoes-linha"><label>Cenário <select class="sel-cenario"></select></label></div>
         <div class="numeros" id="numeros-resumo"></div>
+        <p class="discreto">Resultado da parte que varia com o prazo, não o lucro total da obra.</p>
       </div>
+      <div class="cartao"><h2>As 3 maiores causas de ociosidade</h2><div id="causas"></div></div>
       <div class="cartao"><h2>Caminho crítico</h2><p id="caminho-critico"></p></div>
-      <div class="cartao"><h2>Indiretos</h2>
-        <table class="simples"><thead><tr><th>Item</th><th>Período</th><th class="num">Meses</th><th class="num">R$/mês</th><th class="num">Custo</th><th>Como entra</th></tr></thead>
+      <div class="cartao"><h2>Indiretos reais (custo)</h2>
+        <table class="simples"><thead><tr><th>Item</th><th>Período</th><th class="num">Meses</th><th class="num">R$/mês</th><th class="num">Custo</th></tr></thead>
           <tbody id="tabela-indiretos"></tbody></table></div>
+      <div class="cartao"><h2>Receita que varia com o prazo (critério mensal)</h2>
+        <table class="simples"><thead><tr><th>Item</th><th>Período</th><th class="num">Meses</th><th class="num">R$/mês</th><th class="num">Receita</th></tr></thead>
+          <tbody id="tabela-receitas"></tbody></table></div>
     </section>
   </section>
 </main>

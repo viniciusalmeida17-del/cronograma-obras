@@ -67,6 +67,10 @@ def criar_app(
     def pagina_cronograma():
         return send_from_directory(PASTA_ESTATICA, "cronograma.html")
 
+    @app.get("/sinapi")
+    def pagina_sinapi():
+        return send_from_directory(PASTA_ESTATICA, "sinapi.html")
+
     @app.get("/static/<path:arquivo>")
     def estatico(arquivo):
         return send_from_directory(PASTA_ESTATICA, arquivo)
@@ -273,7 +277,8 @@ def criar_app(
     @app.post("/api/obras/<int:obra_id>/atividade/<codigo>")
     def atividade_obra(obra_id, codigo):
         dados = request.get_json(silent=True) or {}
-        campos = {k: dados[k] for k in ("rendimento", "equipe_padrao", "duracao_manual", "maquinas") if k in dados}
+        campos = {k: dados[k] for k in ("rendimento", "equipe_padrao", "duracao_manual", "maquinas", "producao_dia")
+                  if k in dados}
         try:
             etapa4.definir_atividade(banco, obra_id, codigo, biblioteca=_biblioteca_opcional(), **campos)
         except ValueError:
@@ -290,6 +295,40 @@ def criar_app(
         dados = request.get_json(silent=True) or {}
         return jsonify(etapa4.definir_horas_subcomposicao(banco, obra_id, dados.get("codigo"), dados.get("horas") or {},
                                                           dados.get("descricao"), _biblioteca_opcional()))
+
+    # ------------------------------------------------------------------ SINAPI (etapa 5.1)
+
+    sinapi_arquivos: dict[str, str] = {}
+
+    @app.post("/api/sinapi")
+    def importar_sinapi():
+        """Recebe a tabela analítica (multipart 'arquivo') ou reprocessa um envio anterior com o mapeamento."""
+        from mao_de_obra.sinapi import ErroSinapi
+
+        arquivo = request.files.get("arquivo")
+        if arquivo is not None:
+            if not arquivo.filename.lower().endswith((".xlsx", ".xlsm")):
+                return _erro("Envie a planilha .xlsx de composições analíticas do SINAPI.")
+            token = uuid.uuid4().hex
+            caminho = uploads / f"sinapi_{token}.xlsx"
+            arquivo.save(caminho)
+            sinapi_arquivos[token] = str(caminho)
+            dados = request.form
+            mapeamento = None
+        else:
+            dados = request.get_json(silent=True) or {}
+            token = dados.get("token")
+            if token not in sinapi_arquivos:
+                return _erro("Envie o arquivo do SINAPI de novo.")
+            mapeamento = {k: int(v) for k, v in (dados.get("mapeamento") or {}).items() if v not in (None, "")}
+        try:
+            res = etapa4.importar_sinapi(banco, sinapi_arquivos[token], mapeamento or None, dados.get("aba") or None,
+                                         int(dados["linha_cabecalho"]) if dados.get("linha_cabecalho") else None,
+                                         biblioteca=_biblioteca_opcional())
+        except ErroSinapi as exc:
+            return _erro(str(exc))
+        res["token"] = token
+        return jsonify(res)
 
     # ------------------------------------------------------------------ etapa 5
 
@@ -362,6 +401,19 @@ def criar_app(
             calculos[obra_id] = estado
             estado["thread"].start()
         return jsonify(_estado_calculo(obra_id))
+
+    @app.post("/api/obras/<int:obra_id>/cronograma/limites")
+    def limites_atividade(obra_id):
+        dados = request.get_json(silent=True) or {}
+        etapa5.definir_limites(banco, obra_id, str(dados.get("atividade") or ""), dados.get("equipe_max"),
+                               dados.get("maquinas_max"), _biblioteca_opcional())
+        return jsonify(etapa5.parametros_cronograma(banco, obra_id, _biblioteca_opcional()))
+
+    @app.post("/api/obras/<int:obra_id>/cronograma/sugestao")
+    def aplicar_sugestao(obra_id):
+        dados = request.get_json(silent=True) or {}
+        etapa5.aplicar_sugestao(banco, obra_id, dados.get("acao") or {}, _biblioteca_opcional())
+        return jsonify(etapa5.parametros_cronograma(banco, obra_id, _biblioteca_opcional()))
 
     @app.get("/api/obras/<int:obra_id>/cronograma/calculo")
     def estado_calculo(obra_id):

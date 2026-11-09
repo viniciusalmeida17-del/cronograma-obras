@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Importar SINAPI</title>
+  <link rel="stylesheet" href="/static/estilo.css">
+</head>
+<body>
+<header class="topo">
+  <h1><a href="/" class="link-topo">Cronograma de obras</a></h1>
+  <span class="etapa">Importar a tabela analítica do SINAPI</span>
+</header>
+
+<main>
+  <section class="cartao">
+    <h2>Composições analíticas do SINAPI</h2>
+    <p>Baixe no site da CAIXA a planilha de <b>composições analíticas</b> (do estado e do mês que quiser) e anexe aqui.
+      O app grava no banco de coeficientes as horas por unidade da mão de obra de cada composição (base SINAPI),
+      expandindo as composições auxiliares, e reprocessa as obras: as subcomposições SINAPI pendentes passam a ter origem <b>banco</b>.</p>
+    <form id="form-sinapi" class="acoes-linha">
+      <input type="file" id="arquivo" accept=".xlsx,.xlsm" required>
+      <button type="submit" class="primario">Importar</button>
+      <span class="espaco"></span>
+    </form>
+    <p id="msg" class="mensagem"></p>
+  </section>
+
+  <section class="cartao" id="mapeamento" hidden>
+    <h2>Colunas não reconhecidas</h2>
+    <p>O formato da CAIXA muda de tempos em tempos. Aponte a linha do cabeçalho e a coluna de cada campo.</p>
+    <form id="form-mapa" class="grade-parametros">
+      <label>Aba <input type="text" name="aba" readonly></label>
+      <label>Linha do cabeçalho <input type="number" name="linha_cabecalho" min="1" step="1"></label>
+      <div id="campos" class="largo grade-parametros"></div>
+      <div class="largo acoes-linha"><span class="espaco"></span><button type="submit" class="primario">Importar com estas colunas</button></div>
+    </form>
+  </section>
+</main>
+
+<script src="/static/comum.js"></script>
+<script>
+"use strict";
+let token = null;
+
+function mostrar(r) {
+  if (r.precisa_mapeamento) {
+    token = r.token;
+    $("#mapeamento").hidden = false;
+    const f = $("#form-mapa");
+    f.aba.value = r.aba || "";
+    f.linha_cabecalho.value = r.linha_cabecalho || "";
+    const opcoes = (r.cabecalho || []).map((t, i) => `<option value="${i}">${String.fromCharCode(65 + (i % 26))}: ${esc(t)}</option>`).join("");
+    $("#campos").innerHTML = Object.entries(r.rotulos).map(([campo, rotulo]) => `<label>${esc(rotulo)}
+      <select data-campo="${campo}"><option value="">—</option>${opcoes}</select></label>`).join("");
+    Object.entries(r.mapeamento || {}).forEach(([c, i]) => { const s = $(`select[data-campo=${c}]`); if (s) s.value = i; });
+    mensagem($("#msg"), "Faltam colunas: " + r.faltando.map((c) => r.rotulos[c]).join(", ") + ".", "erro");
+    return;
+  }
+  $("#mapeamento").hidden = true;
+  mensagem($("#msg"), `${r.composicoes_lidas} composições lidas (aba ${r.aba}); ${r.composicoes_com_mao_de_obra} com mão de obra gravadas no banco. `
+    + `Obras reprocessadas: ${r.obras_reprocessadas.length ? r.obras_reprocessadas.join(", ") : "nenhuma"}.`, "ok");
+}
+
+$("#form-sinapi").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const arq = $("#arquivo").files[0];
+  if (!arq) return;
+  const dados = new FormData();
+  dados.append("arquivo", arq);
+  mensagem($("#msg"), "Lendo… (pode levar alguns minutos para o arquivo completo da CAIXA)", "");
+  try { mostrar(await api("/api/sinapi", { method: "POST", body: dados })); }
+  catch (err) { mensagem($("#msg"), err.message, "erro"); }
+});
+
+$("#form-mapa").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const mapa = {};
+  $$("#campos select").forEach((s) => { if (s.value !== "") mapa[s.dataset.campo] = Number(s.value); });
+  try {
+    mostrar(await api("/api/sinapi", { json: { token, mapeamento: mapa, aba: e.target.aba.value, linha_cabecalho: e.target.linha_cabecalho.value } }));
+  } catch (err) { mensagem($("#msg"), err.message, "erro"); }
+});
+</script>
+</body>
+</html>

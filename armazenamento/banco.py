@@ -101,6 +101,7 @@ CREATE TABLE IF NOT EXISTS obra_atividades (
     equipe_padrao         INTEGER,
     equipe_max            INTEGER,
     duracao_fixa_dias     INTEGER,
+    tipo_producao         TEXT,
     PRIMARY KEY (obra_id, codigo)
 );
 
@@ -109,6 +110,8 @@ CREATE TABLE IF NOT EXISTS obra_dependencias (
     atividade             TEXT NOT NULL,
     depende_de            TEXT NOT NULL,
     espera_dias           INTEGER NOT NULL DEFAULT 0,
+    tipo                  TEXT NOT NULL DEFAULT 'TI',  -- TI término-início, II início-início
+    unidade               TEXT NOT NULL DEFAULT 'd',   -- d corridos, du úteis
     origem                TEXT,            -- biblioteca, herdada, fim, usuario
     PRIMARY KEY (obra_id, atividade, depende_de)
 );
@@ -125,16 +128,24 @@ COLUNAS_SERVICO = (
 COLUNAS_OBRA_ATIVIDADE = (
     "codigo", "nome", "etapa", "tipo", "tipo_biblioteca", "total_bdi", "total", "n_itens",
     "periodo_de", "periodo_ate", "equipe_principal", "observacao", "ordem_biblioteca", "editada",
-    "execucao_padrao", "equipe_padrao", "equipe_max", "duracao_fixa_dias",
+    "execucao_padrao", "equipe_padrao", "equipe_max", "duracao_fixa_dias", "tipo_producao",
 )
 # Colunas acrescentadas depois da etapa 2 (migração de bancos antigos)
 MIGRACOES = {
     "servicos": {"status_ligacao": "TEXT", "regra_usada": "INTEGER", "origem_horas": "TEXT"},
     "obras": {"arquivo_salvo": "TEXT", "composicoes_abas": "TEXT"},
     "atividade_resumo": {"maquinas": "TEXT"},
-    "atividade_execucao": {"equipe_travada": "INTEGER"},
+    "atividade_execucao": {"equipe_travada": "INTEGER", "producao_dia": "REAL", "maquinas_max": "INTEGER"},
+    "obra_parametros": {"volume_caminhao": "REAL", "caminhoes_dia": "REAL", "juntar": "TEXT"},
+    "obra_calendario": {"transferiveis": "TEXT", "min_semanas_reducao": "INTEGER", "custo_troca": "REAL",
+                        "salarios": "TEXT", "encargos": "REAL", "indiretos_reais": "TEXT", "terceirizados": "TEXT",
+                        "criterios": "TEXT", "maquinas_max": "INTEGER", "dividir_terceirizadas": "INTEGER"},
+    "cenarios": {"receita_variavel": "REAL", "resultado": "REAL"},
+    "cenario_atividades": {"maquinas": "TEXT", "partes": "TEXT"},
+    "cenario_equipe_semana": {"horas_feriado": "REAL"},
     "obra_atividades": {"execucao_padrao": "TEXT", "equipe_padrao": "INTEGER", "equipe_max": "INTEGER",
-                        "duracao_fixa_dias": "INTEGER"},
+                        "duracao_fixa_dias": "INTEGER", "tipo_producao": "TEXT"},
+    "obra_dependencias": {"tipo": "TEXT NOT NULL DEFAULT 'TI'", "unidade": "TEXT NOT NULL DEFAULT 'd'"},
 }
 COLUNAS_GRUPO = ("linha_excel", "item", "descricao", "item_pai", "total_planilha", "total_bdi_planilha")
 
@@ -249,9 +260,19 @@ class Banco(MaoDeObraMixin, CronogramaMixin):
                 [(obra_id, *(int(a[c]) if c == "editada" else a.get(c) for c in COLUNAS_OBRA_ATIVIDADE)) for a in rede["atividades"].values()],
             )
             con.executemany(
-                "INSERT INTO obra_dependencias (obra_id, atividade, depende_de, espera_dias, origem) VALUES (?,?,?,?,?)",
-                [(obra_id, d["atividade"], d["depende_de"], d["espera_dias"], d["origem"]) for d in rede["dependencias"]],
+                "INSERT INTO obra_dependencias (obra_id, atividade, depende_de, espera_dias, tipo, unidade, origem)"
+                " VALUES (?,?,?,?,?,?,?)",
+                [(obra_id, d["atividade"], d["depende_de"], d["espera_dias"], d.get("tipo") or "TI",
+                  d.get("unidade") or "d", d["origem"]) for d in rede["dependencias"]],
             )
+
+    def atualizar_atividade_obra(self, obra_id: int, codigo: str, **campos: Any) -> None:
+        validos = {k: v for k, v in campos.items() if k in ("equipe_max", "equipe_padrao", "tipo_producao")}
+        if not validos:
+            return
+        with closing(self._conectar()) as con, con:
+            con.execute(f"UPDATE obra_atividades SET {', '.join(f'{k} = ?' for k in validos)} "
+                        "WHERE obra_id = ? AND codigo = ?", (*validos.values(), obra_id, codigo))
 
     def carregar_rede(self, obra_id: int) -> dict[str, Any] | None:
         with closing(self._conectar()) as con:
@@ -265,7 +286,8 @@ class Banco(MaoDeObraMixin, CronogramaMixin):
             a.pop("obra_id")
             a["editada"] = bool(a["editada"])
             atividades[a["codigo"]] = a
-        dependencias = [{k: d[k] for k in ("atividade", "depende_de", "espera_dias", "origem")} for d in deps]
+        dependencias = [{k: d[k] for k in ("atividade", "depende_de", "espera_dias", "tipo", "unidade", "origem")}
+                        for d in deps]
         return {"atividades": atividades, "dependencias": dependencias}
 
     def excluir_obra(self, obra_id: int) -> None:

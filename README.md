@@ -8,6 +8,7 @@ App local para montar o cronograma de uma obra a partir da planilha orçamentár
 | 3 | Liga cada serviço a uma atividade da biblioteca, guarda as escolhas do usuário, monta a rede de atividades da obra | `ETAPA_3_LIGAR_SERVICOS_ATIVIDADES.md` |
 | 4 | Horas por função e de equipamento a partir das composições, própria × terceirizada, duração com a equipe padrão, resumo da obra | `ETAPA_4_MAO_DE_OBRA_E_DURACAO.md` |
 | 5 | Cronograma com datas (otimizador OR-Tools), equipe por semana sem demitir e recontratar, comparação de prazos | `ETAPA_5_CRONOGRAMA_E_EQUIPES.md` |
+| 5.1 | Correções: elos início-início, concretagem, equipes até 20 e máquinas, funções da empresa, custo real × receita, diagnóstico de prazo, ociosidade, referências e SINAPI, Gantt, planilha sem preços sem BDI | `ETAPA_5_1_CORRECOES.md` |
 
 ## Como rodar
 
@@ -75,7 +76,8 @@ Variáveis opcionais: `PORTA` (padrão 5000), `CRONOGRAMA_BANCO` (padrão `crono
 | `  agenda.py` | Solução inicial (busca local), caminho crítico, folgas, equipe por semana, custos e a verificação de todas as restrições. |
 | `  otimizador.py` | Modelo CP-SAT: início e modo de cada atividade, contratados por função e semana, sobe-e-desce, prazo, máximos. |
 | `  obra.py` | Aplica a etapa 5 a uma obra do banco: parâmetros, custos por hora, indiretos por tempo, cenários, comparação, Excel. |
-| `dados/` | `biblioteca_atividades.xlsx` (biblioteca padrão), `funcoes.xlsx` (funções) e `palavras_subcomposicao.txt` (palavras que indicam serviço), todos editáveis. |
+| `  sinapi.py` | (em `mao_de_obra/`) Importa a tabela analítica do SINAPI para o banco de coeficientes. |
+| `dados/` | `biblioteca_atividades.xlsx` (biblioteca padrão), `funcoes.xlsx` (funções e aba Juntar funções), `produtividade_referencia.xlsx` (coeficientes SINAPI pesquisados) e `palavras_subcomposicao.txt` (palavras que indicam serviço), todos editáveis. |
 | `armazenamento/` | SQLite: `obras`, `grupos`, `servicos` (com `atividade_biblioteca`, `status_ligacao`, `regra_usada`), `memoria_ligacoes`, `obra_atividades`, `obra_dependencias` as tabelas da etapa 4 (`armazenamento/banco_etapa4.py`) e as da etapa 5 (`armazenamento/banco_etapa5.py`: `obra_calendario`, `cenarios`, `cenario_atividades`, `cenario_equipe_semana`, `custos_hora_padrao`). Bancos antigos são migrados sozinhos. Uma cópia do .xlsx de cada obra fica em `arquivos_obras/`, ao lado do banco. |
 | `web/` | Servidor Flask local + tela de conferência (HTML/JS puro, sem build). |
 | `tests/` | Testes com o arquivo da Concorrência 2/2024 e o CSV esperado em `tests/dados/`. |
@@ -165,3 +167,34 @@ Variáveis opcionais: `PORTA` (padrão 5000), `CRONOGRAMA_BANCO` (padrão `crono
    vira o cronograma da obra. Gantt (cores por tipo, caminho crítico, folga, faixas das indiretas), equipe por semana (gráfico com
    a parte parada hachurada, tabela semana × função com entrada, pico e saída, equipe indireta à parte, exportação para Excel)
    e resumo.
+
+## Etapa 5.1 — correções
+
+- **Dependências** (`depende_de`): `CÓDIGO[:TIPO][+ESPERA]`. `TI` término-início (padrão) ou `II` início-início;
+  `+Nd` dias corridos, `+Ndu` dias úteis. `A:II+N`: B começa N depois do início de A e **não termina antes** do
+  término de A + N. Formato antigo (`FUN-04+3d`) continua aceito. Na herança, fica o tipo do elo de quem fica e as
+  esperas somam (unidades diferentes → dias úteis, 7 corridos ≈ 5 úteis). EST-03 = 28 dias corridos; só a REV-01 espera a cura.
+- **Concretagem** (`tipo_producao = concretagem`): duração ≥ teto(m³ da atividade ÷ (m³ por caminhão × caminhões por dia));
+  parâmetros da obra (padrão 8 m³ e 3 caminhões).
+- **Equipes e máquinas**: `equipe_max` vazio = 20; o otimizador testa 1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20. Máquinas de cada
+  equipamento de 1 até o máximo (padrão 6, por obra e por atividade); em atividade própria cada máquina traz 1 Operador/Motorista.
+- **Funções da empresa** (`funcoes.xlsx`): Servente, Pedreiro, Pedreiro de acabamento, Carpinteiro, Armador, Bombeiro,
+  Eletricista, Pintor (+ Operador/Motorista). Aba **Juntar funções**: Carpinteiro e Armador → Pedreiro por padrão
+  (liga/desliga por obra na tela de mão de obra). Obras salvas com funções antigas são reprocessadas sozinhas.
+- **Horas**: composição → banco de coeficientes → **referência** (`produtividade_referencia.xlsx`) → estimado.
+  Estimativa acima de 3 × a média da atividade é limitada e marcada em vermelho. Tela **Importar SINAPI**
+  (tabela analítica da CAIXA, colunas pelo cabeçalho ou mapeamento manual). Terceirizadas: **produção por dia** calcula
+  a duração e vira padrão para as próximas obras.
+- **Prazo da licitação**: é o cenário principal e sempre é calculado; cenários só iguais ou menores. Se não couber:
+  diagnóstico com o menor prazo, o caminho crítico (duração, equipe e máquinas usadas/máximas) e sugestões com o ganho
+  calculado, com botão "aplicar e recalcular".
+- **Custo real × receita**: salário + encargos (padrão 80%) por função, indiretos reais por mês e valor contratado dos
+  terceirizados (padrões lembrados para a próxima obra; enquanto não preencher, aviso "referência da licitação").
+  Critério de pagamento das indiretas: proporcional (padrão), mensal ou fixo. A tabela mostra receita e custo que
+  variam com o prazo, o **resultado** e a diferença para o principal (só a parte que varia com o prazo).
+- **Ociosidade**: sem contar feriados (coluna à parte), total e por função, com as 3 maiores causas. Funções que
+  **podem sair e voltar** (padrão Servente e Pedreiro) não seguem o sobe-e-desce, mas cada redução dura ≥ 2 semanas.
+  Terceirizadas podem ser feitas em até 3 partes de ≥ 5 dias úteis.
+- **Gantt**: escala dia/semana/mês, etapas que abrem e fecham (barra-resumo), linhas de hoje e da data limite, setas de
+  dependência (II tracejada), só o caminho crítico, terceirizadas em partes.
+- **Leitor**: planilha só com preços com BDI é aceita; os sem BDI são calculados pelo BDI (um aviso só).

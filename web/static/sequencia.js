@@ -42,7 +42,7 @@ function desenhar() {
 
 function linhaAtividade(a) {
   const deps = a.dependencias
-    .map((d) => `<span class="dep ${d.origem}" title="${ROTULO_ORIGEM[d.origem] || ""}">${d.depende_de}${d.espera_dias ? `<b>+${d.espera_dias}d</b>` : ""}</span>`)
+    .map((d) => `<span class="dep ${d.origem}" title="${ROTULO_ORIGEM[d.origem] || ""}">${d.depende_de}${d.tipo === "II" ? "<b>:II</b>" : ""}${d.espera_dias ? `<b>+${d.espera_dias}${d.unidade || "d"}</b>` : ""}</span>`)
     .join(" ");
   return `<tr class="tipo-${a.tipo} ${editando === a.codigo ? "em-edicao" : ""}">
     <td class="num">${a.posicao}</td>
@@ -57,7 +57,7 @@ function linhaAtividade(a) {
 }
 
 function linhaEdicao(a) {
-  const depsTexto = a.dependencias.filter((d) => d.origem !== "fim").map((d) => d.depende_de + (d.espera_dias ? `+${d.espera_dias}d` : "")).join(", ");
+  const depsTexto = a.dependencias.filter((d) => d.origem !== "fim").map((d) => d.depende_de + (d.tipo === "II" ? ":II" : "") + (d.espera_dias ? `+${d.espera_dias}${d.unidade || "d"}` : "")).join(", ");
   const temFim = a.dependencias.some((d) => d.origem === "fim");
   return `<tr class="edicao"><td colspan="8">
     <form id="form-edicao" class="form-edicao">

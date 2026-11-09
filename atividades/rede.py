@@ -5,7 +5,7 @@ A rede é um dicionário pronto para JSON:
     {
       "atividades": {codigo: {codigo, nome, etapa, tipo, total, total_bdi, n_itens,
                               periodo_de, periodo_ate, ordem_biblioteca, ...}},
-      "dependencias": [{atividade, depende_de, espera_dias, origem}],
+      "dependencias": [{atividade, depende_de, espera_dias, tipo (TI/II), unidade (d/du), origem}],
     }
 
 `origem` da dependência: "biblioteca", "herdada" (veio de uma atividade que saiu),
@@ -67,43 +67,70 @@ def escolher_atividades(biblioteca: Biblioteca, com_servico: set[str]) -> set[st
     return entram
 
 
-def _dependencias_efetivas(biblioteca: Biblioteca, entram: set[str]) -> dict[str, dict[str, tuple[int, str]]]:
-    """Para cada atividade da obra: {depende_de: (espera, origem)}, já com a herança das que saíram.
+def somar_elos(fica: Dependencia, herdado: Dependencia, codigo: str) -> Dependencia:
+    """B depende de A (elo `fica`) e A, que saiu, depende de C (elo `herdado`): B passa a depender de C.
 
-    Se B depende de A+x e A sai, B herda as dependências de A: C+y vira C+(x+y).
-    Se a mesma dependência chegar por dois caminhos, fica a maior espera.
+    Mantém o tipo do elo de quem fica (B) e soma as esperas; com unidades diferentes, tudo em dias úteis.
     """
-    memo: dict[str, dict[str, int]] = {}
+    if fica.unidade == herdado.unidade or not fica.espera_dias or not herdado.espera_dias:
+        unidade = fica.unidade if fica.espera_dias else herdado.unidade
+        espera = fica.espera_dias + herdado.espera_dias
+    else:
+        unidade, espera = "du", fica.espera_uteis() + herdado.espera_uteis()
+    return Dependencia(codigo, espera, fica.tipo, unidade if espera else "d")
 
-    def herdadas(codigo: str) -> dict[str, int]:
+
+def _maior(a: Dependencia | None, b: Dependencia) -> bool:
+    """b é mais restritiva que a? Término-início vence início-início; no mesmo tipo, a maior espera."""
+    if a is None:
+        return True
+    return (b.tipo == "TI", b.espera_uteis()) > (a.tipo == "TI", a.espera_uteis())
+
+
+def _dependencias_efetivas(biblioteca: Biblioteca, entram: set[str]) -> dict[str, dict[str, tuple[Dependencia, str]]]:
+    """Para cada atividade da obra: {depende_de: (Dependencia, origem)}, já com a herança das que saíram.
+
+    Se B depende de A+x e A sai, B herda as dependências de A: C+y vira C+(x+y), com o tipo do elo de B.
+    Se a mesma dependência chegar por dois caminhos, fica a mais restritiva.
+    """
+    memo: dict[str, dict[str, Dependencia]] = {}
+
+    def herdadas(codigo: str) -> dict[str, Dependencia]:
         """Dependências (dentro da obra) de uma atividade que saiu."""
         if codigo in memo:
             return memo[codigo]
-        res: dict[str, int] = {}
+        res: dict[str, Dependencia] = {}
         for d in biblioteca.atividades[codigo].depende_de:
-            if d.codigo in entram:
-                res[d.codigo] = max(res.get(d.codigo, 0), d.espera_dias)
-            else:
-                for c, y in herdadas(d.codigo).items():
-                    res[c] = max(res.get(c, 0), d.espera_dias + y)
+            candidatas = [d] if d.codigo in entram else [somar_elos(d, y, c) for c, y in herdadas(d.codigo).items()]
+            for nova in candidatas:
+                if _maior(res.get(nova.codigo), nova):
+                    res[nova.codigo] = nova
         memo[codigo] = res
         return res
 
-    efetivas: dict[str, dict[str, tuple[int, str]]] = {}
+    efetivas: dict[str, dict[str, tuple[Dependencia, str]]] = {}
     for cod in entram:
-        deps: dict[str, tuple[int, str]] = {}
+        deps: dict[str, tuple[Dependencia, str]] = {}
         for d in biblioteca.atividades[cod].depende_de:
             if d.codigo in entram:
-                atual = deps.get(d.codigo)
-                if atual is None or d.espera_dias > atual[0]:
-                    deps[d.codigo] = (d.espera_dias, "biblioteca")
+                candidatas = [(d, "biblioteca")]
             else:
-                for c, y in herdadas(d.codigo).items():
-                    atual = deps.get(c)
-                    if atual is None or d.espera_dias + y > atual[0]:
-                        deps[c] = (d.espera_dias + y, "herdada")
+                candidatas = [(somar_elos(d, y, c), "herdada") for c, y in herdadas(d.codigo).items()]
+            for nova, origem in candidatas:
+                atual = deps.get(nova.codigo)
+                if _maior(atual[0] if atual else None, nova):
+                    deps[nova.codigo] = (nova, origem)
         efetivas[cod] = deps
     return efetivas
+
+
+def dep_para_dict(atividade: str, d: Dependencia, origem: str) -> dict[str, Any]:
+    return {"atividade": atividade, "depende_de": d.codigo, "espera_dias": d.espera_dias, "tipo": d.tipo,
+            "unidade": d.unidade, "origem": origem}
+
+
+def dict_para_dep(d: Mapping[str, Any]) -> Dependencia:
+    return Dependencia(d["depende_de"], int(d.get("espera_dias") or 0), d.get("tipo") or "TI", d.get("unidade") or "d")
 
 
 def montar_rede(biblioteca: Biblioteca, servicos: Iterable[Mapping[str, Any]], excluir: Iterable[str] = ()) -> dict[str, Any]:
@@ -129,15 +156,15 @@ def montar_rede(biblioteca: Biblioteca, servicos: Iterable[Mapping[str, Any]], e
             "n_itens": t["n_itens"], "total": t["total"], "total_bdi": t["total_bdi"],
             "ordem_biblioteca": a.ordem, "editada": False,
             "execucao_padrao": a.execucao_padrao, "equipe_padrao": a.equipe_padrao,
-            "equipe_max": a.equipe_max, "duracao_fixa_dias": a.duracao_fixa_dias,
+            "equipe_max": a.equipe_max, "duracao_fixa_dias": a.duracao_fixa_dias, "tipo_producao": a.tipo_producao,
         }
 
     na_sequencia = {c for c, a in atividades.items() if a["tipo"] != INDIRETA}
     efetivas = _dependencias_efetivas(biblioteca, na_sequencia)
     dependencias = [
-        {"atividade": cod, "depende_de": dep, "espera_dias": espera, "origem": origem}
+        dep_para_dict(cod, d, origem)
         for cod in sorted(efetivas, key=lambda c: atividades[c]["ordem_biblioteca"])
-        for dep, (espera, origem) in sorted(efetivas[cod].items(), key=lambda x: atividades[x[0]]["ordem_biblioteca"])
+        for _, (d, origem) in sorted(efetivas[cod].items(), key=lambda x: atividades[x[0]]["ordem_biblioteca"])
     ]
     rede = {"atividades": atividades, "dependencias": dependencias}
     ligar_ao_fim(rede)
@@ -157,7 +184,7 @@ def ligar_ao_fim(rede: dict[str, Any]) -> None:
     for cod in seq:
         if cod == ATIVIDADE_FINAL or cod in com_sucessor or cod in ja_no_fim:
             continue
-        deps.append({"atividade": ATIVIDADE_FINAL, "depende_de": cod, "espera_dias": 0, "origem": "fim"})
+        deps.append(dep_para_dict(ATIVIDADE_FINAL, Dependencia(cod), "fim"))
     rede["dependencias"] = deps
 
 
@@ -195,7 +222,7 @@ def sequencia(rede: Mapping[str, Any]) -> list[dict[str, Any]]:
         a = dict(rede["atividades"][cod])
         a["posicao"] = posicao
         a["dependencias"] = deps_por_ativ[cod]
-        a["depende_de_texto"] = formatar_dependencias([Dependencia(d["depende_de"], d["espera_dias"]) for d in deps_por_ativ[cod]])
+        a["depende_de_texto"] = formatar_dependencias([dict_para_dep(d) for d in deps_por_ativ[cod]])
         saida.append(a)
     return saida
 
@@ -232,7 +259,7 @@ def editar_atividade(
                 raise ErroRede("; ".join(erros))
         else:
             deps = list(depende_de)
-        vistos: dict[str, int] = {}
+        vistos: dict[str, Dependencia] = {}
         for d in deps:
             if d.codigo == codigo:
                 raise ErroRede(f"{codigo} não pode depender dela mesma.")
@@ -240,11 +267,10 @@ def editar_atividade(
                 raise ErroRede(f"{d.codigo} não está nesta obra.")
             if nova["atividades"][d.codigo]["tipo"] == INDIRETA:
                 raise ErroRede(f"{d.codigo} é indireta e não entra na sequência.")
-            vistos[d.codigo] = max(vistos.get(d.codigo, 0), d.espera_dias)
+            if _maior(vistos.get(d.codigo), d):
+                vistos[d.codigo] = d
         nova["dependencias"] = [d for d in nova["dependencias"] if d["atividade"] != codigo]
-        nova["dependencias"] += [
-            {"atividade": codigo, "depende_de": c, "espera_dias": e, "origem": "usuario"} for c, e in vistos.items()
-        ]
+        nova["dependencias"] += [dep_para_dict(codigo, d, "usuario") for d in vistos.values()]
         ativ["editada"] = True
     ligar_ao_fim(nova)
     validar_rede(nova)
@@ -253,7 +279,7 @@ def editar_atividade(
 
 def dependencias_de(rede: Mapping[str, Any], codigo: str, incluir_fim: bool = True) -> list[Dependencia]:
     return [
-        Dependencia(d["depende_de"], d["espera_dias"])
+        dict_para_dep(d)
         for d in rede["dependencias"]
         if d["atividade"] == codigo and (incluir_fim or d["origem"] != "fim")
     ]

@@ -17,19 +17,20 @@ INICIO = "2025-03-03"
 TEMPO = 12  # segundos por cenário nos testes
 
 
+# durações digitadas para as terceirizadas sem horas (item 1 da etapa 5.1)
+DURACOES_TERCEIRIZADAS = {"MET-01": 40, "QUA-03": 15, "SER-02": 20, "ESQ-01": 5, "EXA-01": 5, "PEX-04": 5}
+
+
 def resolver_pendencias(banco, obra, biblioteca):
-    """Responde as pendências da etapa 4 como um usuário faria e põe 4 caminhões na terraplenagem."""
+    """Responde as pendências da etapa 4 como um usuário faria: 'perguntar' = própria e as durações do item 1."""
     est = etapa4.estado_mao_de_obra(banco, obra, biblioteca)
     perguntar = [p["atividade"] for p in est["pendencias"] if p["tipo"] == "execucao"]
     if perguntar:
         etapa4.definir_execucao(banco, obra, perguntar, "propria", biblioteca)
     est = etapa4.estado_mao_de_obra(banco, obra, biblioteca)
     for p in est["pendencias"]:
-        etapa4.definir_atividade(banco, obra, p["atividade"], duracao_manual=10, biblioteca=biblioteca)
-    ter = next(a for a in est["atividades"] if a["codigo"] == "TER-01")
-    caminhao = max(ter["horas_equipamento"], key=ter["horas_equipamento"].get)
-    # com 1 caminhão a TER-01 leva 156 dias úteis e a obra não cabe em 12 meses
-    etapa4.definir_atividade(banco, obra, "TER-01", maquinas={caminhao: 4}, biblioteca=biblioteca)
+        etapa4.definir_atividade(banco, obra, p["atividade"], duracao_manual=DURACOES_TERCEIRIZADAS.get(p["atividade"], 10),
+                                 biblioteca=biblioteca)
 
 
 @pytest.fixture(scope="module")
@@ -45,7 +46,8 @@ def obra_pronta(tmp_path_factory, arquivo_teste, biblioteca):
 @pytest.fixture(scope="module")
 def comparacao(obra_pronta, biblioteca):
     banco, obra = obra_pronta
-    return etapa5.calcular_cenarios(banco, obra, [10, 12], biblioteca, TEMPO)
+    # 6 meses não cabe (diagnóstico); 13 é maior que o prazo da licitação e não é calculado
+    return etapa5.calcular_cenarios(banco, obra, [6, 12, 13], biblioteca, TEMPO)
 
 
 def _cenario(comparacao, prazo):
@@ -58,7 +60,8 @@ def _cenario(comparacao, prazo):
 def test_custo_por_hora_das_composicoes(obra_pronta):
     banco, obra = obra_pronta
     c = etapa5.custos_das_composicoes(banco, obra)
-    assert c["Pedreiro"]["custo_hora"] == pytest.approx(24.43)
+    # 24,43 (pedreiro com encargos), um pouco abaixo com calceteiro/assentador, que agora são Pedreiro
+    assert 24.0 <= c["Pedreiro"]["custo_hora"] <= 24.43
     # Servente: 17,77 (servente com encargos) misturado com ajudantes que a tabela de funções chama de Servente
     assert 17.77 <= c["Servente"]["custo_hora"] <= 19.67
     assert c["Pedreiro"]["base"] == "com encargos"
@@ -69,7 +72,10 @@ def test_parametros_padrao(obra_pronta, biblioteca):
     p = etapa5.parametros_cronograma(banco, obra, biblioteca)
     assert p["data_inicio"] == INICIO and p["limite_rigidas"] == 5 and p["tempo_limite"] == 60
     assert p["prazos"] == [9.0, 10.0, 11.0, 12.0]          # prazo − 3, − 2, − 1 e o próprio
-    assert p["custos"]["Pedreiro"]["origem"] == "composicoes"
+    assert p["custos"]["Pedreiro"]["origem"] == "composicoes" and p["custos"]["Pedreiro"]["referencia"]
+    assert any("referência da licitação" in a for a in p["avisos"])
+    assert p["transferiveis"] == ["Servente", "Pedreiro"]   # padrão: podem sair e voltar
+    assert p["encargos"] == 80
     assert "Pedreiro" in p["funcoes"] and p["pendencias_etapa4"] == []
 
 
@@ -77,7 +83,8 @@ def test_validacao_dos_parametros(obra_pronta):
     banco, obra = obra_pronta
     for ruim in ({"data_inicio": "03/03/2025"}, {"limite_rigidas": -1}, {"tempo_limite": 1},
                  {"custos_hora": {"Pedreiro": "abc"}}, {"custos_hora": {"Pedreiro": 0}}, {"prazos": [0]},
-                 {"feriados_locais": [{"data": "31/02"}]}):
+                 {"feriados_locais": [{"data": "31/02"}]}, {"prazos": [13]}, {"criterios": {"1.5.1": "talvez"}},
+                 {"salarios": {"Pedreiro": "abc"}}):
         with pytest.raises(etapa5.ErroCronograma):
             etapa5.salvar_parametros_cronograma(banco, obra, ruim)
 
@@ -98,8 +105,8 @@ def test_custo_salvo_vira_padrao_da_proxima_obra(tmp_path, arquivo_teste, biblio
     a = preparar_obra(banco, arquivo_teste, biblioteca)
     etapa4.analisar_obra(banco, a, biblioteca)
     etapa5.salvar_parametros_cronograma(banco, a, {"custos_hora": {"Pedreiro": "30,50"}})
-    assert etapa5.parametros_cronograma(banco, a, biblioteca)["custos"]["Pedreiro"] == {
-        "custo_hora": 30.5, "origem": "obra", "composicoes": 24.43}
+    ped = etapa5.parametros_cronograma(banco, a, biblioteca)["custos"]["Pedreiro"]
+    assert (ped["custo_hora"], ped["origem"], ped["referencia"]) == (30.5, "obra", False)
     b = preparar_obra(banco, arquivo_teste, biblioteca)
     etapa4.analisar_obra(banco, b, biblioteca)
     pb = etapa5.parametros_cronograma(banco, b, biblioteca)["custos"]
@@ -110,7 +117,12 @@ def test_custo_salvo_vira_padrao_da_proxima_obra(tmp_path, arquivo_teste, biblio
 def test_indiretos_que_variam_com_o_prazo(obra_pronta, biblioteca):
     banco, obra = obra_pronta
     inst, _ = etapa5.montar_instancia(banco, obra, 12, biblioteca)
-    itens = {i.descricao.split()[0]: i for i in inst.indiretos}
+    reais = {i.descricao.split()[0]: i for i in inst.indiretos}   # indiretos reais (padrão: valores da planilha)
+    assert reais["1.5.1"].custo_mes == pytest.approx(361091.88 / 12, abs=0.01)
+    assert "1.1.1" not in reais                                      # taxa (%) não é por mês
+    dados = banco.carregar_obra(obra)
+    itens = {i.descricao.split()[0]: i for i in etapa5.indiretos_da_obra(dados["servicos"],
+                                                                        banco.carregar_rede(obra)["atividades"], 12)}
     assert itens["1.5.1"].tipo == "obra" and itens["1.5.1"].custo_mes == pytest.approx(361091.88 / 12)
     assert itens["1.5.2"].tipo == "periodo" and itens["1.5.2"].custo_mes == pytest.approx(52428.78 / 3)
     assert (itens["1.5.2"].de, itens["1.5.2"].ate) == ("TER-01", "FUN-04")
@@ -123,15 +135,42 @@ def test_indiretos_que_variam_com_o_prazo(obra_pronta, biblioteca):
 
 
 def test_tabela_tem_uma_linha_por_prazo(comparacao):
-    assert [c["prazo_meses"] for c in comparacao["cenarios"]] == [10.0, 12.0]
-    dez = _cenario(comparacao, 10.0)
-    assert dez["situacao"] == "impossivel"
-    assert dez["menor_prazo"]["dias_uteis"] > 0 and dez["menor_prazo"]["caminho_critico"][-1] == "LIM-01"
-    assert "TER-01" in dez["menor_prazo"]["caminho_critico"]
+    """Cenários só até o prazo da licitação (13 não entra); o de 12 é o principal."""
+    assert [c["prazo_meses"] for c in comparacao["cenarios"]] == [6.0, 12.0]
+    seis = _cenario(comparacao, 6.0)
+    assert seis["situacao"] == "impossivel"
+    assert seis["menor_prazo"]["dias_uteis"] > 0 and seis["menor_prazo"]["caminho_critico"][-1] == "LIM-01"
     doze = _cenario(comparacao, 12.0)
-    assert doze["situacao"] in ("otimo", "melhor_encontrado")
-    assert doze["mais_barato"] and doze["diferenca"] == 0
+    assert doze["situacao"] in ("otimo", "melhor_encontrado") and doze["principal"]
+    assert doze["melhor_resultado"] and doze["diferenca"] == 0
     assert doze["custo_total"] == pytest.approx(doze["custo_mao_de_obra"] + doze["custo_indiretos"], abs=0.05)
+    assert doze["resultado"] == pytest.approx(doze["receita_variavel"] - doze["custo_total"], abs=0.05)
+
+
+def test_diagnostico_quando_nao_cabe(comparacao):
+    """Prazo impossível: caminho crítico com duração, equipe e máquinas, e sugestões com o ganho calculado."""
+    d = _cenario(comparacao, 6.0)["diagnostico"]
+    assert d["menor_prazo"]["dias_uteis"] > d["dias_uteis_limite"]
+    cadeia = d["caminho_critico"]
+    assert cadeia[0]["codigo"] == "PRE-01" and cadeia[-1]["codigo"] == "LIM-01"
+    assert all({"duracao", "equipe", "equipe_max", "maquinas", "maquinas_max"} <= set(c) for c in cadeia)
+    assert d["sugestoes"] and all(s["ganho"] > 0 for s in d["sugestoes"])
+    assert d["sugestoes"] == sorted(d["sugestoes"], key=lambda s: -s["ganho"])
+    assert all("reduz" in s["texto"] and s["acao"]["atividade"] for s in d["sugestoes"])
+
+
+def test_aplicar_sugestao_recalcula(tmp_path, arquivo_teste, biblioteca):
+    banco = Banco(str(tmp_path / "s.sqlite3"))
+    obra = preparar_obra(banco, arquivo_teste, biblioteca)
+    etapa4.analisar_obra(banco, obra, biblioteca)
+    resolver_pendencias(banco, obra, biblioteca)
+    etapa5.salvar_parametros_cronograma(banco, obra, {"data_inicio": INICIO})
+    inst, ctx = etapa5.montar_instancia(banco, obra, 6, biblioteca)
+    d = etapa5.diagnostico(inst, ctx)
+    s = d["sugestoes"][0]
+    etapa5.aplicar_sugestao(banco, obra, s["acao"], biblioteca)
+    inst2, ctx2 = etapa5.montar_instancia(banco, obra, 6, biblioteca)
+    assert etapa5.diagnostico(inst2, ctx2)["menor_prazo"]["dias_uteis"] == d["menor_prazo"]["dias_uteis"] - s["ganho"]
 
 
 def _reconstruir(banco, obra, biblioteca, cenario):
@@ -142,10 +181,11 @@ def _reconstruir(banco, obra, biblioteca, cenario):
     for a in cenario["atividades"]:
         t = inst.tarefas[a["codigo"]]
         ini = cal.uteis.index(date.fromisoformat(a["inicio"]))
-        modo = next(k for k, m in enumerate(t.modos) if m.equipe == a["equipe"] or (not a["equipe"] and not m.equipe)
-                    or m.corridos)
-        sol[a["codigo"]] = {"inicio": ini, "modo": modo, "duracao": inst.duracao(a["codigo"], modo, ini),
-                            "fim": inst.termino(a["codigo"], modo, ini)}
+        modo = next(k for k, m in enumerate(t.modos)
+                    if m.corridos or (t.equipe_propria(k) == a["equipe"] and dict(m.maquinas) == a["maquinas"]
+                                      and inst.duracao(a["codigo"], k, ini) == a["duracao"]))
+        partes = [(cal.uteis.index(date.fromisoformat(p["inicio"])), p["duracao"]) for p in a["partes"] or []]
+        sol[a["codigo"]] = inst.entrada(a["codigo"], modo, ini, partes or None)
         assert cal.data_do_offset(sol[a["codigo"]]["fim"]).isoformat() == a["termino"]
     contratados = {f["funcao"]: f["contratados"] for f in cenario["funcoes"]}
     return inst, sol, contratados
@@ -155,12 +195,15 @@ def test_cenario_de_12_meses_respeita_todas_as_restricoes(obra_pronta, bibliotec
     banco, obra = obra_pronta
     doze = _cenario(comparacao, 12.0)
     c = etapa5.detalhe_cenario(banco, obra, doze["id"])
-    assert c["termino"] <= c["data_limite"] == "2026-03-02"
-    assert len(c["atividades"]) == 74
+    assert c["termino"] <= c["data_limite"] == "2026-03-02"     # a planilha de teste cabe em 12 meses
+    assert len(c["atividades"]) == len([a for a in banco.carregar_rede(obra)["atividades"].values()
+                                        if a["tipo"] != "indireta"])
     inst, sol, contratados = _reconstruir(banco, obra, biblioteca, c)
     assert verificar(inst, sol, contratados) == []
-    # sobe e desce, conferido aqui também
+    # sobe e desce (funções que não podem sair e voltar), conferido aqui também
     for f in c["funcoes"]:
+        if f["funcao"] in ("Servente", "Pedreiro"):
+            continue
         serie = f["contratados"]
         pico = serie.index(max(serie))
         assert all(a <= b for a, b in zip(serie[:pico], serie[1:pico + 1])), f["funcao"]
@@ -170,7 +213,8 @@ def test_cenario_de_12_meses_respeita_todas_as_restricoes(obra_pronta, bibliotec
         if a["execucao"] == "terceirizada":
             assert a["equipe"] == {}
     assert c["pico"] == max(c["total_semana"])
-    assert 0 < c["ociosidade"] < 100
+    assert 0 < c["ociosidade"] < 61.7   # bem abaixo do teste do usuário
+    assert c["ociosidade_funcao"] and len(c["causas_ociosidade"]) <= 3
     assert c["caminho_critico"][0] == "PRE-01" and c["caminho_critico"][-1] == "LIM-01"
 
 
@@ -190,7 +234,7 @@ def test_periodos_das_indiretas(obra_pronta, comparacao):
 
 def test_escolher_cenario_e_exportar(obra_pronta, comparacao):
     banco, obra = obra_pronta
-    dez, doze = _cenario(comparacao, 10.0), _cenario(comparacao, 12.0)
+    dez, doze = _cenario(comparacao, 6.0), _cenario(comparacao, 12.0)
     with pytest.raises(etapa5.ErroCronograma):
         etapa5.escolher_cenario(banco, obra, dez["id"])
     etapa5.escolher_cenario(banco, obra, doze["id"])
@@ -207,11 +251,12 @@ def test_equipe_travada_na_obra(obra_pronta, biblioteca):
     banco, obra = obra_pronta
     etapa5.travar_equipe(banco, obra, "FUN-03", 3, biblioteca)
     inst, _ = etapa5.montar_instancia(banco, obra, 12, biblioteca)
-    assert len(inst.tarefas["FUN-03"].modos) == 1 and inst.tarefas["FUN-03"].modos[0].equipe["Carpinteiro"] == 3
+    # com "juntar" ligado, carpinteiro e armador viram pedreiro: a principal da FUN-03 é Pedreiro
+    assert len(inst.tarefas["FUN-03"].modos) == 1 and inst.tarefas["FUN-03"].modos[0].equipe["Pedreiro"] == 3
     with pytest.raises(etapa5.ErroCronograma):
         etapa5.travar_equipe(banco, obra, "TER-01", 2, biblioteca)   # terceirizada
     with pytest.raises(etapa5.ErroCronograma):
-        etapa5.travar_equipe(banco, obra, "FUN-03", 9, biblioteca)   # acima da equipe máxima
+        etapa5.travar_equipe(banco, obra, "FUN-03", 21, biblioteca)  # acima da equipe máxima (20)
     etapa5.travar_equipe(banco, obra, "FUN-03", None, biblioteca)
     assert banco.equipes_travadas(obra) == {}
 

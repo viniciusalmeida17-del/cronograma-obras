@@ -131,11 +131,11 @@ def tabela_funcoes():
 @pytest.fixture(scope="session")
 def analisador(composicoes_teste, tabela_funcoes, resultado):
     from mao_de_obra.analise import Analisador, mapa_codigo_item
-    from mao_de_obra.funcoes import carregar_palavras_subcomposicao
+    from mao_de_obra.funcoes import carregar_palavras_subcomposicao, carregar_referencias
 
     return Analisador(composicoes_teste.composicoes, tabela_funcoes,
                       carregar_palavras_subcomposicao(RAIZ / "dados" / "palavras_subcomposicao.txt"),
-                      mapa_codigo_item(resultado["servicos"]))
+                      mapa_codigo_item(resultado["servicos"]), referencias=carregar_referencias(tabela_funcoes))
 
 
 @pytest.fixture(scope="session")

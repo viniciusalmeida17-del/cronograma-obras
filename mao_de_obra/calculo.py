@@ -5,7 +5,10 @@ import math
 from collections import defaultdict
 from typing import Any, Iterable, Mapping
 
-from .analise import BANCO, COMPOSICAO, ESTIMADO, MANUAL, SEM_MAO_DE_OBRA
+from leitor_planilha.texto import unidade_canonica
+
+from .analise import BANCO, COMPOSICAO, ESTIMADO, MANUAL, REFERENCIA, SEM_MAO_DE_OBRA
+from .funcoes import juntar_horas
 
 PROPRIA = "propria"
 TERCEIRIZADA = "terceirizada"
@@ -13,9 +16,12 @@ PERGUNTAR = "perguntar"
 EXECUCOES = (PROPRIA, TERCEIRIZADA)
 INDIRETA = "indireta"
 
-PARAMETROS_PADRAO = {"horas_semana": 44.0, "dias_semana": 5, "rendimento": 0.90, "mudancas_jornada": []}
+PARAMETROS_PADRAO = {"horas_semana": 44.0, "dias_semana": 5, "rendimento": 0.90, "mudancas_jornada": [],
+                     "volume_caminhao": 8.0, "caminhoes_dia": 3, "juntar": {}}
 EQUIPE_PADRAO = 2
-EQUIPE_MAX = 6
+EQUIPE_MAX = 20
+CONCRETAGEM = "concretagem"
+LIMITE_ESTIMATIVA = 3.0  # horas estimadas por unidade ≤ 3 × a média dos serviços completos da atividade
 SEMANAS_POR_MES = 4.33
 
 
@@ -34,6 +40,7 @@ def calcular_duracao(
     equipe_padrao: int,
     horas_dia: float,
     maquinas: Mapping[str, int] | None = None,
+    dias_minimos: int | None = None,
 ) -> dict[str, Any] | None:
     """Duração (dias úteis) com a equipe padrão. None se não houver horas.
 
@@ -44,7 +51,7 @@ def calcular_duracao(
     """
     horas = {f: h for f, h in horas_ajustadas.items() if h > 0}
     equip = {e: h for e, h in horas_equipamento.items() if h > 0}
-    if not horas and not equip:
+    if not horas and not equip and not dias_minimos:
         return None
     equipe: dict[str, int] = {}
     dias_funcao: dict[str, float] = {}
@@ -61,16 +68,27 @@ def calcular_duracao(
     dias_pessoas = max(dias_funcao.values(), default=0.0)
     dias_maquinas = max(dias_equip.values(), default=0.0)
     limitante = "equipamento" if dias_maquinas > dias_pessoas else "mao_de_obra"
+    exatos = max(dias_pessoas, dias_maquinas)
+    if dias_minimos and dias_minimos > _teto(exatos):
+        limitante, exatos = CONCRETAGEM, float(dias_minimos)
     return {
         "funcao_principal": principal,
         "equipe": equipe,
         "dias_por_funcao": {f: round(d, 2) for f, d in dias_funcao.items()},
         "dias_por_equipamento": {e: round(d, 2) for e, d in dias_equip.items()},
         "maquinas": qtd_maquinas,
-        "dias_exatos": round(max(dias_pessoas, dias_maquinas), 4),
-        "dias": _teto(max(dias_pessoas, dias_maquinas)),
+        "dias_exatos": round(exatos, 4),
+        "dias": max(1, _teto(exatos)),
         "limitante": limitante,
+        "dias_concretagem": dias_minimos,
     }
+
+
+def dias_concretagem(volume_m3: float, volume_caminhao: float, caminhoes_dia: float) -> int | None:
+    """Duração mínima pela concretagem: teto(volume ÷ (m³ por caminhão × caminhões por dia))."""
+    if not volume_m3 or volume_m3 <= 0 or not volume_caminhao or not caminhoes_dia:
+        return None
+    return _teto(volume_m3 / (float(volume_caminhao) * float(caminhoes_dia)))
 
 
 def semanas_do_prazo(valor: float | None, unidade: str | None) -> float | None:
@@ -92,7 +110,7 @@ def _soma_horas(analise: Mapping[str, Any], qtd: float, origens: Iterable[str] |
 
 
 def _completo(analise: Mapping[str, Any]) -> bool:
-    return (analise["origem"] in (COMPOSICAO, BANCO, MANUAL) and not analise["pendentes"]
+    return (analise["origem"] in (COMPOSICAO, BANCO, REFERENCIA, MANUAL) and not analise["pendentes"]
             and any(h["horas_un"] > 0 for h in analise["horas"]))
 
 
@@ -111,6 +129,7 @@ def aplicar_estimativas(
     avisos: list[dict[str, Any]] = []
     ctx: dict[tuple[str, str], dict[str, Any]] = defaultdict(lambda: {"horas": defaultdict(float), "custo": 0.0})
     horas_reais_ativ: dict[str, float] = defaultdict(float)
+    media_ativ: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0])  # horas, quantidade dos completos
     for s in servicos:
         cod = s.get("atividade_biblioteca")
         a = analises.get(s["id"])
@@ -119,6 +138,9 @@ def aplicar_estimativas(
             continue
         qtd = s.get("quantidade") or 0.0
         horas_reais_ativ[cod] += sum(h["horas_un"] for h in a["horas"] if h["origem"] != ESTIMADO) * qtd
+        if _completo(a) and qtd > 0:
+            media_ativ[cod][0] += sum(h["horas_un"] for h in a["horas"]) * qtd
+            media_ativ[cod][1] += qtd
         if _completo(a) and (s.get("total") or 0) > 0:
             for chave in (("atividade", cod), ("etapa", ativ.get("etapa") or ""), ("obra", "")):
                 for f, h in _soma_horas(a, qtd).items():
@@ -158,14 +180,27 @@ def aplicar_estimativas(
             avisos.append({"servico": s["id"], "mensagem": f"Item {s['item']}: não há serviços completos para estimar as horas."})
             continue
         nivel, por_funcao = r
+        razao_total = sum(por_funcao.values())
+        # proteção: horas estimadas por unidade > 3 × média dos serviços completos da mesma atividade
+        fator, limite_un = 1.0, None
+        hm, qm = media_ativ.get(cod, (0.0, 0.0))
+        estimadas_un = custo * razao_total / qtd
+        if qm > 0 and hm > 0 and estimadas_un > LIMITE_ESTIMATIVA * hm / qm:
+            limite_un = LIMITE_ESTIMATIVA * hm / qm
+            fator = limite_un / estimadas_un
         for f, k in por_funcao.items():
             if k * custo > 0:
-                a["horas"].append({"funcao": f, "horas_un": k * custo / qtd, "origem": ESTIMADO})
-        razao_total = sum(por_funcao.values())
+                a["horas"].append({"funcao": f, "horas_un": k * custo * fator / qtd, "origem": ESTIMADO})
         for p in a["pendentes"]:
-            p["horas_estimadas"] = round((p["total_linha"] or 0.0) * qtd * razao_total, 4)
+            p["horas_estimadas"] = round((p["total_linha"] or 0.0) * qtd * razao_total * fator, 4)
         a["estimativa"] = {"nivel": nivel, "custo": round(custo, 2), "razao_h_por_real": round(razao_total, 6),
-                           "horas": round(custo * razao_total, 2)}
+                           "horas": round(custo * razao_total * fator, 2), "limitada": limite_un is not None,
+                           "horas_sem_limite": round(custo * razao_total, 2) if limite_un is not None else None,
+                           "limite_h_un": round(limite_un, 4) if limite_un is not None else None}
+        if limite_un is not None:
+            avisos.append({"servico": s["id"], "limitada": True,
+                           "mensagem": f"Item {s['item']}: estimativa limitada a 3 × a média da atividade "
+                                       f"({limite_un:.3f} h/un), revisar."})
     return avisos
 
 
@@ -219,10 +254,14 @@ def calcular_obra(
                 equip[e] += h * qtd
             custo_por_origem[a["origem"]] += s.get("total") or 0.0
             custo_origem_ativ[a["origem"]] += s.get("total") or 0.0
+        brutas = defaultdict(float, juntar_horas(dict(brutas), params.get("juntar") or {}))
         rendimento = ex.get("rendimento") or params["rendimento"]
         ajustadas = {f: h / rendimento for f, h in brutas.items()}
         equipe_padrao = int(ex.get("equipe_padrao") or ativ.get("equipe_padrao") or EQUIPE_PADRAO)
-        calc = calcular_duracao(ajustadas, equip, equipe_padrao, hd, ex.get("maquinas"))
+        volume = sum((s.get("quantidade") or 0.0) for s in servs if unidade_canonica(s.get("unidade")) == "M3")
+        minimo = (dias_concretagem(volume, params["volume_caminhao"], params["caminhoes_dia"])
+                  if ativ.get("tipo_producao") == CONCRETAGEM else None)
+        calc = calcular_duracao(ajustadas, equip, equipe_padrao, hd, ex.get("maquinas"), minimo)
         execucao_escolhida = ex.get("execucao")
 
         if ex.get("duracao_manual"):
@@ -261,6 +300,9 @@ def calcular_obra(
             "duracao": duracao,
             "duracao_manual": ex.get("duracao_manual"),
             "duracao_fixa_dias": ativ.get("duracao_fixa_dias"),
+            "tipo_producao": ativ.get("tipo_producao"),
+            "volume_m3": round(volume, 4) if ativ.get("tipo_producao") == CONCRETAGEM else None,
+            "dias_concretagem": minimo,
             "ordem_biblioteca": ativ.get("ordem_biblioteca", 0),
         })
 
@@ -274,8 +316,8 @@ def calcular_obra(
     custo_total = sum(custo_por_origem.values())
     cobertura = {o: {"custo": round(custo_por_origem.get(o, 0.0), 2),
                      "percentual": round(100 * custo_por_origem.get(o, 0.0) / custo_total, 2) if custo_total else 0.0}
-                 for o in (COMPOSICAO, BANCO, ESTIMADO, MANUAL, SEM_MAO_DE_OBRA)}
-    com_horas = sum(cobertura[o]["custo"] for o in (COMPOSICAO, BANCO, ESTIMADO, MANUAL))
+                 for o in (COMPOSICAO, BANCO, REFERENCIA, ESTIMADO, MANUAL, SEM_MAO_DE_OBRA)}
+    com_horas = sum(cobertura[o]["custo"] for o in (COMPOSICAO, BANCO, REFERENCIA, ESTIMADO, MANUAL))
     return {
         "parametros": {**params, "horas_por_dia": round(hd, 4)},
         "atividades": sorted(resultado_ativ, key=lambda a: a["ordem_biblioteca"]),

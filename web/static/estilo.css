@@ -336,3 +336,39 @@ table.comparacao th, table.comparacao th.num { white-space: normal; vertical-ali
 table.comparacao .selo { display: inline-block; white-space: nowrap; margin: 1px 0; }
 table.comparacao .botoes-cenario { margin-top: 4px; white-space: nowrap; }
 #tabela-custos input { max-width: 110px; }
+
+.selo-origem.referencia { background: #e3f6ee; color: #0d6b4a; }
+.limitada { display: inline-block; margin-top: 2px; padding: 1px 6px; border-radius: 4px; background: #fde2e1; color: #a32424; font-size: 11px; font-weight: 600; }
+#lista-juntar { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+
+/* ---------------------------------------------------------------- etapa 5.1 */
+.avisos-custos { margin: 8px 0 0; padding-left: 18px; color: #8a5a00; font-size: 13px; }
+.avisos-custos:empty { display: none; }
+.referencia-valor { color: #8a5a00; }
+.diagnostico { margin-top: 16px; padding: 12px 16px; border: 1px solid #f0c8c4; background: #fdf6f5; border-radius: 6px; }
+.diagnostico h3 { margin-top: 0; }
+.sugestoes li { margin: 4px 0; }
+.sugestoes button { margin-left: 8px; }
+.barra-gantt { flex-wrap: wrap; gap: 8px 16px; }
+.alternar button.ativo { background: #2a78d6; color: #fff; border-color: #2a78d6; }
+.g-conteudo { position: relative; }
+.g-regua { min-height: 30px; }
+.g-cel { position: absolute; top: 2px; font-size: 10px; line-height: 12px; color: #52514e; text-align: center; border-left: 1px solid #e1e0d9; overflow: hidden; white-space: nowrap; }
+.g-cel.fds { background: #f3f2ee; }
+.g-etapa { cursor: pointer; }
+.seta-grupo { display: inline-block; width: 12px; color: #52514e; }
+.g-resumo { position: absolute; top: 6px; height: 8px; border-radius: 2px; background: #52514e; }
+.g-ligacao { position: absolute; top: 9px; height: 2px; background: #eb6834; opacity: .5; }
+.g-vertical { position: absolute; top: 0; bottom: 0; width: 0; border-left: 2px solid; z-index: 1; pointer-events: none; }
+.g-vertical.hoje { border-color: #2a78d6; }
+.g-vertical.limite { border-color: #d03b3b; border-left-style: dashed; }
+.g-setas { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; z-index: 1; }
+.g-setas path { fill: none; stroke-width: 1.2; }
+.g-setas path.seta-ti { stroke: #52514e; }
+.g-setas path.seta-ii { stroke: #6250d6; stroke-dasharray: 4 3; }
+.legenda i.linha-hoje, .legenda i.linha-limite, .legenda i.seta-ti, .legenda i.seta-ii { display: inline-block; width: 16px; height: 0; margin-right: 5px; vertical-align: 3px; border-top: 2px solid; }
+.legenda i.linha-hoje { border-color: #2a78d6; }
+.legenda i.linha-limite { border-color: #d03b3b; border-top-style: dashed; }
+.legenda i.seta-ti { border-color: #52514e; }
+.legenda i.seta-ii { border-color: #6250d6; border-top-style: dashed; }
+.linha-indireto input[name=ind_desc] { width: 100%; min-width: 260px; }

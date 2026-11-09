@@ -32,6 +32,7 @@
       <p id="abas-composicoes" class="discreto"></p>
       <div class="acoes-linha">
         <a id="link-sequencia" class="botao">← Sequência</a>
+        <a href="/sinapi" class="botao" title="Importar a tabela analítica de composições do SINAPI para o banco de coeficientes">Importar SINAPI</a>
         <button type="button" class="secundario" id="btn-reanalisar" title="Relê as composições do arquivo (as horas digitadas são mantidas)">Reler composições</button>
         <span class="espaco"></span>
         <a id="link-cronograma" class="botao primario" title="Etapa 5: cronograma com datas e equipes">Seguir para o cronograma →</a>
@@ -55,10 +56,17 @@
         <label>Rendimento (%) <input type="number" name="rendimento" min="30" max="150" step="1">
           <small>Horas ajustadas = horas da tabela ÷ rendimento. 90% = 11% a mais de horas.</small>
         </label>
+        <label>Concreto: m³ por caminhão <input type="number" name="volume_caminhao" min="0.5" max="100" step="0.5">
+          <small>Atividades de concretagem (FUN-04, EST-02, QUA-02) duram no mínimo volume ÷ (m³ por caminhão × caminhões por dia).</small></label>
+        <label>Caminhões de concreto por dia <input type="number" name="caminhoes_dia" min="1" max="100" step="1"></label>
         <div class="info-parametros">
           <div><span class="discreto">Horas por dia</span> <b id="horas-dia"></b></div>
           <div><span class="discreto">Prazo da licitação</span> <b id="prazo-licitacao"></b></div>
         </div>
+        <fieldset class="largo">
+          <legend>Juntar funções <small>(as horas passam para a função de destino antes do cálculo de equipes e duração)</small></legend>
+          <div id="lista-juntar"></div>
+        </fieldset>
         <fieldset class="largo">
           <legend>Mudanças de jornada <small>(guardadas agora; a etapa 5 aplica semana a semana)</small></legend>
           <div id="lista-mudancas"></div>

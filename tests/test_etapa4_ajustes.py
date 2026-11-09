@@ -83,7 +83,7 @@ def test_7_2_sem_pendentes(analise_por_item):
     assert a["pendentes"] == []
     assert {"87292"} & {str(p["codigo"]) for p in analise_por_item["7.3"]["pendentes"]} == set()
     pend = {str(p["codigo"]) for p in analise_por_item["5.1.14"]["pendentes"]}
-    assert {"ED-48202", "87893", "101963"} <= pend
+    assert "ED-48202" in pend  # 87893 e 101963 agora vêm de dados/produtividade_referencia.xlsx
 
 
 def test_exemplo_da_especificacao_com_o_item_7_2_real(obra_teste):

@@ -1,8 +1,10 @@
 """Otimizador do cronograma com OR-Tools CP-SAT.
 
 Variáveis: início (dia útil) e modo de cada tarefa; contratados C[f][s] de cada função em cada semana.
-Restrições: dependências com espera (em dias corridos), rígidas até `limite_rigidas` dias úteis depois de
-liberadas, capacidade diária ≤ C da semana, C sobe até um pico e depois só desce, prazo, máximos opcionais.
+Restrições: elos término-início e início-início com espera (dias corridos ou úteis), rígidas até
+`limite_rigidas` dias úteis depois de liberadas, capacidade diária ≤ C da semana, C sobe até um pico e depois
+só desce (ou, nas funções que podem sair e voltar, reduções de pelo menos N semanas), terceirizadas em até 3
+partes, prazo, máximos opcionais.
 Objetivo: mão de obra própria paga (C × horas × custo/h) + indiretos que variam com o prazo + desempate
 por terminar mais cedo.
 """
@@ -86,6 +88,7 @@ def otimizar(
     progresso: Callable[[dict[str, Any]], None] | None = None,
     parar: threading.Event | None = None,
     workers: int = 0,
+    solucoes_extra: list[dict[str, dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     """Resolve um cenário. Devolve o resumo da solução (ver `agenda.resumir`) com `situacao`."""
     cal = inst.calendario
@@ -101,6 +104,18 @@ def otimizar(
     c_inicial = contratados_minimos(inst, inicial)
     av_inicial = avaliar(inst, inicial, c_inicial)
     inicial_valida = not av_inicial["violacoes"]
+    # soluções de outros cenários (ex.: um prazo menor, que também vale aqui) como ponto de partida
+    for extra in solucoes_extra or []:
+        if set(extra) != set(inst.tarefas):
+            continue
+        try:
+            c_extra = contratados_minimos(inst, extra)
+            av_extra = avaliar(inst, extra, c_extra)
+        except (IndexError, KeyError):
+            continue
+        if not av_extra["violacoes"] and (not inicial_valida or
+                                          custo_da_solucao(inst, av_extra) < custo_da_solucao(inst, av_inicial)):
+            inicial, c_inicial, av_inicial, inicial_valida = extra, c_extra, av_extra, True
 
     cp_model = _cp()
     m = cp_model.CpModel()
@@ -108,13 +123,15 @@ def otimizar(
     off = cal.offset[:H]
     lim = inst.offset_limite
     n_semanas = cal.semana(H - 1) + 1
-    max_espera = max((w for t in inst.tarefas.values() for _, w in t.deps), default=0)
+    max_espera = max((e.espera for t in inst.tarefas.values() for e in t.deps), default=0)
     # primeiro dia útil com offset >= c, para c até além do limite (H = fora do horizonte)
     tam_tabela = lim + max_espera + 3
     idx_de_offset = [min(cal.indice_util(c), H) for c in range(tam_tabela)]
+    ult_de_offset = [max(0, min(cal.ultimo_util_ate(c), H - 1)) for c in range(lim + 1)]
     jornadas_variam = len({cal.horas_dia(i) for i in range(H)}) > 1
 
-    s, cs, fc, x = {}, {}, {}, {}
+    s, cs, fc, ev, x = {}, {}, {}, {}, {}
+    partes_var: dict[str, list[tuple[Any, Any, Any]]] = {}
     intervalos: dict[str, list[tuple[Any, int]]] = {f: [] for f in inst.funcoes}
     for cod in inst.ordem:
         t = inst.tarefas[cod]
@@ -122,11 +139,13 @@ def otimizar(
         cs[cod] = m.NewIntVar(0, off[-1], f"cs_{cod}")
         m.AddElement(s[cod], off, cs[cod])
         fc[cod] = m.NewIntVar(0, lim, f"fc_{cod}")
+        ev[cod] = m.NewIntVar(0, H - 1, f"e_{cod}")
         modos = t.modos
         x[cod] = [m.NewBoolVar(f"x_{cod}_{k}") for k in range(len(modos))]
         m.AddExactlyOne(x[cod])
         if modos[0].corridos:
             m.Add(fc[cod] == cs[cod] + modos[0].duracao(0) - 1)
+            m.AddElement(fc[cod], ult_de_offset, ev[cod])
             continue
         dur_modos = []
         for k, modo in enumerate(modos):
@@ -143,17 +162,45 @@ def otimizar(
         d_tar = m.NewIntVar(dmin, dmax, f"d_{cod}")
         for k, (dk, _, _) in enumerate(dur_modos):
             m.Add(d_tar == dk).OnlyEnforceIf(x[cod][k])
-        e = m.NewIntVar(0, H - 1, f"e_{cod}")
-        m.Add(e == s[cod] + d_tar - 1)
-        m.AddElement(e, off, fc[cod])
+        if t.pode_dividir() and dmax >= 2 * t.parte_min:
+            # terceirizada em até `partes_max` partes de pelo menos `parte_min` dias úteis, com intervalos
+            partes = []
+            fim_ant = None
+            for k in range(t.partes_max):
+                pres = m.NewConstant(1) if k == 0 else m.NewBoolVar(f"pp_{cod}_{k}")
+                st = s[cod] if k == 0 else m.NewIntVar(0, H, f"ps_{cod}_{k}")
+                ln = m.NewIntVar(0, dmax, f"pl_{cod}_{k}")
+                fim = m.NewIntVar(0, H - 1, f"pe_{cod}_{k}")
+                m.Add(fim == st + ln - 1)
+                if k == 0:
+                    m.Add(ln >= min(t.parte_min, dmin))
+                else:
+                    m.AddImplication(pres, partes[-1][0]) if k > 1 else None
+                    m.Add(ln >= t.parte_min).OnlyEnforceIf(pres)
+                    m.Add(st >= fim_ant + 1).OnlyEnforceIf(pres)
+                    m.Add(ln == 0).OnlyEnforceIf(pres.Not())
+                    m.Add(st == fim_ant + 1).OnlyEnforceIf(pres.Not())
+                partes.append((pres, st, ln))
+                fim_ant = fim
+            m.Add(sum(p[2] for p in partes) == d_tar)
+            m.Add(ev[cod] == fim_ant)
+            # a primeira parte sozinha precisa ter o mínimo se houver outras
+            if len(partes) > 1:
+                m.Add(partes[0][2] >= t.parte_min).OnlyEnforceIf(partes[1][0])
+            partes_var[cod] = partes
+        else:
+            m.Add(ev[cod] == s[cod] + d_tar - 1)
+        m.AddElement(ev[cod], off, fc[cod])
+        if not t.propria:
+            continue
         for k, modo in enumerate(modos):
             if not modo.equipe:
                 continue
-            dk, a, b = dur_modos[k]
+            dk, a_, b_ = dur_modos[k]
             if isinstance(dk, int):
                 iv = m.NewOptionalFixedSizeIntervalVar(s[cod], dk, x[cod][k], f"iv_{cod}_{k}")
             else:
-                fim_k = m.NewIntVar(0, H - 1 + b, f"f_{cod}_{k}")
+                fim_k = m.NewIntVar(0, H - 1 + b_, f"f_{cod}_{k}")
                 iv = m.NewOptionalIntervalVar(s[cod], dk, fim_k, x[cod][k], f"iv_{cod}_{k}")
             for f, q in modo.equipe.items():
                 intervalos[f].append((iv, q))
@@ -163,26 +210,51 @@ def otimizar(
                     or (inst.max_total is not None and sum(modo.equipe.values()) > inst.max_total):
                 m.Add(x[cod][k] == 0)
 
-    # dependências, liberação e rígidas
+    def idx(expr, nome):
+        """Primeiro dia útil com offset ≥ expr (variável auxiliar)."""
+        v = m.NewIntVar(0, tam_tabela - 1, f"o_{nome}")
+        m.Add(v == expr)
+        r = m.NewIntVar(0, H, f"i_{nome}")
+        m.AddElement(v, idx_de_offset, r)
+        return r
+
+    # elos, liberação e rígidas
     for cod in inst.ordem:
         t = inst.tarefas[cod]
         termos = []
-        for a, w in t.deps:
-            m.Add(cs[cod] >= fc[a] + w + 1)
-            termos.append(fc[a] + w + 1)
-        if t.tipo not in (RIGIDA, AGUARDAR):
+        precisa_lib = t.tipo in (RIGIDA, AGUARDAR)
+        for n, e in enumerate(t.deps):
+            a, w = e.anterior, e.espera
+            nome = f"{cod}_{n}"
+            if e.tipo == "TI":
+                if e.unidade == "du":
+                    m.Add(s[cod] >= ev[a] + 1 + w)
+                    termos.append(ev[a] + 1 + w)
+                else:
+                    m.Add(cs[cod] >= fc[a] + w + 1)
+                    if precisa_lib:
+                        termos.append(idx(fc[a] + w + 1, nome))
+            else:
+                if e.unidade == "du":
+                    m.Add(s[cod] >= s[a] + w)
+                    m.Add(ev[cod] >= ev[a] + w)
+                    termos += [s[a] + w, ev[a] + w - (ev[cod] - s[cod])]
+                else:
+                    m.Add(cs[cod] >= cs[a] + w)
+                    m.Add(fc[cod] >= fc[a] + w)
+                    if precisa_lib:
+                        termos += [idx(cs[a] + w, nome + "i"), idx(fc[a] + w, nome + "f") - (ev[cod] - s[cod])]
+        if not precisa_lib:
             continue
         folga = 0 if t.tipo == AGUARDAR else inst.limite_rigidas
         if not termos:
             m.Add(s[cod] <= folga)
             continue
-        r = m.NewIntVar(0, tam_tabela - 1, f"lib_{cod}")
-        m.AddMaxEquality(r, termos)
-        ri = m.NewIntVar(0, H, f"libi_{cod}")
-        m.AddElement(r, idx_de_offset, ri)
-        m.Add(s[cod] <= ri + folga)
+        lib = m.NewIntVar(-H, H + max_espera + 2, f"lib_{cod}")
+        m.AddMaxEquality(lib, termos + [0])
+        m.Add(s[cod] <= lib + folga)
 
-    # contratados por semana, capacidade e sobe-e-desce
+    # contratados por semana, capacidade, sobe-e-desce (ou reduções mínimas nas transferíveis)
     semanas_ini = {}
     for i in range(H):
         semanas_ini.setdefault(cal.semana(i), [i, i])[1] = i
@@ -202,12 +274,30 @@ def otimizar(
             ivs.append(m.NewFixedSizeIntervalVar(i0, i1 - i0 + 1, f"cap_{f}_{w}"))
             demandas.append(teto - C[f][w])
         m.AddCumulative(ivs, demandas, teto)
-        p = [m.NewBoolVar(f"p_{f}_{w}") for w in range(n_semanas - 1)]
-        for w in range(n_semanas - 1):
-            if w:
-                m.AddImplication(p[w - 1], p[w])
-            m.Add(C[f][w] <= C[f][w + 1]).OnlyEnforceIf(p[w].Not())
-            m.Add(C[f][w] >= C[f][w + 1]).OnlyEnforceIf(p[w])
+        if f in inst.transferiveis:
+            # toda redução dura pelo menos `min_semanas_reducao` semanas
+            for w in range(1, n_semanas):
+                cai = m.NewBoolVar(f"cai_{f}_{w}")
+                m.Add(C[f][w] >= C[f][w - 1]).OnlyEnforceIf(cai.Not())
+                for k in range(1, inst.min_semanas_reducao):
+                    if w + k < n_semanas:
+                        m.Add(C[f][w + k] <= C[f][w]).OnlyEnforceIf(cai)
+            if inst.custo_troca > 0:
+                troca = round(CENTAVOS * inst.custo_troca)
+                for w in range(n_semanas + 1):
+                    ant = C[f][w - 1] if w > 0 else 0
+                    atual = C[f][w] if w < n_semanas else 0
+                    dv = m.NewIntVar(0, teto, f"tr_{f}_{w}")
+                    m.Add(dv >= atual - ant)
+                    m.Add(dv >= ant - atual)
+                    custo_termos.append(troca * dv)
+        else:
+            p = [m.NewBoolVar(f"p_{f}_{w}") for w in range(n_semanas - 1)]
+            for w in range(n_semanas - 1):
+                if w:
+                    m.AddImplication(p[w - 1], p[w])
+                m.Add(C[f][w] <= C[f][w + 1]).OnlyEnforceIf(p[w].Not())
+                m.Add(C[f][w] >= C[f][w + 1]).OnlyEnforceIf(p[w])
         custo_h = max(inst.custo_hora.get(f, 0.0), 0.01)
         for w in range(n_semanas):
             custo_termos.append(C[f][w] * round(CENTAVOS * pagas[w] * custo_h))
@@ -234,6 +324,10 @@ def otimizar(
             m.AddHint(s[cod], a["inicio"])
             for k, xv in enumerate(x[cod]):
                 m.AddHint(xv, 1 if k == a["modo"] else 0)
+            for k, (pres, st, ln) in enumerate(partes_var.get(cod, [])):
+                m.AddHint(ln, a["duracao"] if k == 0 else 0)
+                if k:
+                    m.AddHint(pres, 0)
         for f in inst.funcoes:
             serie = c_inicial.get(f, [])
             for w in range(n_semanas):
@@ -262,7 +356,9 @@ def otimizar(
         for cod in inst.ordem:
             k = next(k for k, xv in enumerate(x[cod]) if solver.Value(xv))
             ini = solver.Value(s[cod])
-            sol[cod] = {"inicio": ini, "modo": k, "duracao": inst.duracao(cod, k, ini), "fim": inst.termino(cod, k, ini)}
+            partes = [(solver.Value(st), solver.Value(ln)) for pres, st, ln in partes_var.get(cod, [])
+                      if solver.Value(pres) and solver.Value(ln) > 0]
+            sol[cod] = inst.entrada(cod, k, ini, partes if len(partes) > 1 else None)
         contratados = {f: [solver.Value(v) for v in C[f]] for f in inst.funcoes}
         contratados = _cortar(contratados, inst, sol)
         res = avaliar(inst, sol, contratados)

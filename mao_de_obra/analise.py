@@ -19,6 +19,7 @@ from leitor_planilha.texto import normalizar
 from .composicoes import Composicao
 from .funcoes import (
     INDIRETA,
+    OPERADOR,
     TabelaFuncoes,
     eh_equipamento,
     eh_subcomposicao,
@@ -32,7 +33,8 @@ BANCO = "banco"
 ESTIMADO = "estimado"
 SEM_MAO_DE_OBRA = "sem_mao_de_obra"
 MANUAL = "manual"
-ORIGENS = (COMPOSICAO, BANCO, ESTIMADO, MANUAL, SEM_MAO_DE_OBRA)
+REFERENCIA = "referencia"
+ORIGENS = (COMPOSICAO, BANCO, REFERENCIA, ESTIMADO, MANUAL, SEM_MAO_DE_OBRA)
 
 
 class ConsultaBanco(Protocol):
@@ -75,12 +77,14 @@ class Analisador:
         palavras: list[str],
         codigo_para_item: Mapping[str, str],
         banco: ConsultaBanco | None = None,
+        referencias: Mapping[str, Mapping[str, float]] | None = None,
     ):
         self.composicoes = composicoes
         self.funcoes = funcoes
         self.palavras = palavras
         self.codigo_para_item = codigo_para_item
         self.banco = banco or BancoVazio()
+        self.referencias = referencias or {}  # código normalizado -> {funcao: h/un} (produtividade_referencia.xlsx)
         self._memo: dict[str, AnaliseComposicao] = {}
 
     def analisar_composicao(self, item: str, pilha: tuple[str, ...] = ()) -> AnaliseComposicao:
@@ -96,6 +100,17 @@ class Analisador:
                 continue
             regra = self.funcoes.identificar(linha.descricao)
             if regra and unidade_de_mao_de_obra(linha.unidade):
+                if regra.funcao == OPERADOR:
+                    # operador/motorista vem com a máquina (etapa 5: 1 por máquina em atividade própria);
+                    # as horas não entram, mas o preço serve de custo por hora inicial
+                    if linha.preco and linha.preco > 0:
+                        acc = res.custos[OPERADOR]
+                        acc[0] += coef
+                        acc[1] += coef * linha.preco
+                        if "ENCARGOS" in normalizar(linha.descricao):
+                            acc[2] += coef
+                            acc[3] += coef * linha.preco
+                    continue
                 if regra.categoria == INDIRETA:
                     if unidade_norm(linha.unidade) == "MES":
                         res.indireta[regra.funcao] += coef
@@ -134,6 +149,13 @@ class Analisador:
                     res.horas[(funcao, BANCO)] += h * coef
                 res.expandidos.append({"codigo": linha.codigo, "item": None, "coeficiente": coef,
                                        "horas_un": sum(do_banco.values()) * coef, "banco": True})
+                continue
+            da_referencia = self.referencias.get(codigo) if codigo else None
+            if da_referencia:
+                for funcao, h in da_referencia.items():
+                    res.horas[(funcao, REFERENCIA)] += h * coef
+                res.expandidos.append({"codigo": linha.codigo, "item": None, "coeficiente": coef,
+                                       "horas_un": sum(da_referencia.values()) * coef, "referencia": True})
                 continue
             if eh_subcomposicao(linha.descricao, self.palavras):
                 res.pendentes.append({"codigo": linha.codigo, "descricao": linha.descricao,
@@ -195,7 +217,12 @@ class Analisador:
             base["horas"] = {(f, BANCO): h for f, h in do_banco.items() if h}
             base["origem"] = BANCO
             return base
-        base["origem"] = ESTIMADO  # sem composição e sem banco: estimar pelo custo
+        da_referencia = self.referencias.get(chave_codigo(servico.get("codigo"))) if servico.get("codigo") else None
+        if da_referencia:
+            base["horas"] = {(f, REFERENCIA): h for f, h in da_referencia.items() if h}
+            base["origem"] = REFERENCIA
+            return base
+        base["origem"] = ESTIMADO  # sem composição, banco nem referência: estimar pelo custo
         base["estimar_servico_inteiro"] = True
         return base
 

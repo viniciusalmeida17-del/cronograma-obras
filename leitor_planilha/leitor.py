@@ -212,6 +212,24 @@ def _interpretar_grade(
 
     # 3) linhas
     grupos, servicos, ignoradas = _classificar_linhas(grade, formatos, colunas, idx_cab, alertas)
+    so_com_bdi = "total" not in colunas and "total_bdi" in colunas
+    if so_com_bdi:
+        # planilha só com preços com BDI: os sem BDI são calculados pelo BDI (um aviso só, no lugar dos de coluna)
+        alertas[:] = [a for a in alertas if not (a["tipo"] == "coluna" and any(
+            f"'{ROTULOS_CAMPOS[c]}'" in a["mensagem"] for c in ("preco_unit", "total")))]
+        bdi = obra.get("bdi")
+        if bdi is not None and bdi > -1:
+            fator = 1 + float(bdi)
+            for sv in servicos:
+                sv["preco_unit"] = arredondar_reais(sv["preco_unit_bdi"] / fator) if sv["preco_unit_bdi"] is not None else None
+                sv["total"] = arredondar_reais(sv["total_bdi"] / fator) if sv["total_bdi"] is not None else None
+                sv["valores_sem_bdi"] = "calculado"
+            pct = f"{100 * float(bdi):.2f}".replace(".", ",")
+            alertas.append(_alerta("aviso", None, f"Planilha sem preços sem BDI; valores sem BDI calculados pelo BDI de {pct}%.",
+                                   "coluna"))
+        else:
+            alertas.append(_alerta("aviso", None, "Planilha sem preços sem BDI e sem BDI informado; valores sem BDI "
+                                   "não calculados (informe o BDI).", "coluna"))
     _montar_hierarquia(grupos, servicos, alertas)
 
     # 4) totais da planilha: linha logo abaixo do cabeçalho (ou linha de total solta no fim)
@@ -228,7 +246,10 @@ def _interpretar_grade(
     if not obra["nome"]:
         alertas.append(_alerta("aviso", None, "Nome da obra não encontrado.", "obra"))
 
-    validacao = validar(obra, grupos, servicos, alertas)
+    validacao = validar(obra, grupos, servicos, alertas, so_com_bdi=so_com_bdi)
+    if so_com_bdi:
+        obra["total_planilha"] = validacao["soma_servicos"] if obra.get("bdi") is not None else None
+        obra["sem_bdi_calculado"] = True
 
     base.update(
         {

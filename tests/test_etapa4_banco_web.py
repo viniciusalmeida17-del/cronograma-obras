@@ -40,7 +40,7 @@ def test_analise_grava_tudo(banco, obra, biblioteca):
         {"Engenheiro": 0.2, "Encarregado": 1, "Técnico de segurança": 1, "Vigia": 1}
     assert {r["aba"] for r in estado["abas_composicoes"]} >= {"ELÉTRICA", "ALVENARIA", "FUNDAÇÃO", "CPU"}
     resumo = {r["atividade"]: r for r in banco.carregar_resumo_atividades(obra)}
-    assert resumo["EST-03"]["duracao_dias"] == 21 and resumo["EST-03"]["duracao_unidade"] == "corridos"
+    assert resumo["EST-03"]["duracao_dias"] == 28 and resumo["EST-03"]["duracao_unidade"] == "corridos"
     assert resumo["ALV-02"]["funcao_principal"] == "Pedreiro"
     con = sqlite3.connect(banco.caminho)
     assert con.execute("SELECT COUNT(*) FROM servico_mao_de_obra WHERE origem = 'estimado'").fetchone()[0] > 0
@@ -77,7 +77,7 @@ def test_equipe_padrao_recalcula_e_respeita_maximo(banco, obra, biblioteca):
     depois = _ativ(etapa4.estado_mao_de_obra(banco, obra, biblioteca), "ALV-02")
     assert depois["equipe_padrao"] == 4 and depois["duracao"]["dias"] < antes
     with pytest.raises(etapa4.ErroMaoDeObra):
-        etapa4.definir_atividade(banco, obra, "ALV-02", equipe_padrao=7, biblioteca=biblioteca)
+        etapa4.definir_atividade(banco, obra, "ALV-02", equipe_padrao=21, biblioteca=biblioteca)
     with pytest.raises(etapa4.ErroMaoDeObra):
         etapa4.definir_atividade(banco, obra, "IND-01", equipe_padrao=2, biblioteca=biblioteca)
 

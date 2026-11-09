@@ -125,7 +125,7 @@ def test_rigida_comeca_ate_5_dias_uteis_depois_de_liberada():
     i.tarefas["B"].tipo = "rigida"
     i.tarefas["A"].tipo = "rigida"
     sol = agendar_cedo(i, {c: 0 for c in t})
-    sol["B"] = {"inicio": 16, "modo": 0, "duracao": 3, "fim": i.termino("B", 0, 16)}
+    sol["B"] = i.entrada("B", 0, 16)
     erros = verificar(i, sol, {"Pedreiro": [5] * 10, "Servente": [5] * 10})
     assert any("B: rígida começa 6 dias úteis" in e for e in erros)
 

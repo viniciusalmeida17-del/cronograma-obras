@@ -16,7 +16,10 @@ CREATE TABLE IF NOT EXISTS obra_parametros (
     horas_semana          REAL NOT NULL DEFAULT 44,
     dias_semana           INTEGER NOT NULL DEFAULT 5,
     rendimento            REAL NOT NULL DEFAULT 0.9,
-    mudancas_jornada      TEXT                -- JSON: [{"a_partir_de": "AAAA-MM-DD", "horas_semana": 42}]
+    mudancas_jornada      TEXT,               -- JSON: [{"a_partir_de": "AAAA-MM-DD", "horas_semana": 42}]
+    volume_caminhao       REAL,               -- etapa 5.1: m³ por caminhão de concreto (padrão 8)
+    caminhoes_dia         REAL,               -- etapa 5.1: caminhões de concreto por dia (padrão 3)
+    juntar                TEXT                -- etapa 5.1: JSON funcao -> destino; NULL = padrão da funcoes.xlsx
 );
 
 CREATE TABLE IF NOT EXISTS servico_mao_de_obra (
@@ -61,6 +64,8 @@ CREATE TABLE IF NOT EXISTS atividade_execucao (
     equipe_padrao         INTEGER,            -- opcional: substitui o da biblioteca
     duracao_manual        INTEGER,            -- opcional: dias úteis
     equipe_travada        INTEGER,            -- etapa 5: pessoas da função principal (opcional)
+    producao_dia          REAL,               -- etapa 5.1: terceirizada, produção por dia (duração = qtd ÷ produção)
+    maquinas_max          INTEGER,            -- etapa 5.1: máximo de máquinas de cada equipamento (padrão 6)
     PRIMARY KEY (obra_id, atividade)
 );
 
@@ -88,6 +93,14 @@ CREATE TABLE IF NOT EXISTS atividade_resumo (
     PRIMARY KEY (obra_id, atividade)
 );
 
+-- produção por dia digitada (terceirizadas), padrão para as próximas obras
+CREATE TABLE IF NOT EXISTS producao_padrao (
+    atividade             TEXT PRIMARY KEY,
+    producao_dia          REAL NOT NULL,
+    unidade               TEXT,
+    data                  TEXT NOT NULL
+);
+
 -- Banco de coeficientes: não é apagado com a obra (sem chave estrangeira de propósito)
 CREATE TABLE IF NOT EXISTS banco_coeficientes (
     base                  TEXT NOT NULL,      -- normalizado ('' quando desconhecida)
@@ -96,13 +109,14 @@ CREATE TABLE IF NOT EXISTS banco_coeficientes (
     horas_un              REAL NOT NULL,
     obra_origem           INTEGER,
     data                  TEXT NOT NULL,
-    origem                TEXT NOT NULL,      -- planilha ou manual
+    origem                TEXT NOT NULL,      -- planilha, manual ou sinapi
     descricao             TEXT,
     PRIMARY KEY (base, codigo, funcao, origem)
 );
 """
 
-PARAMETROS_PADRAO = {"horas_semana": 44.0, "dias_semana": 5, "rendimento": 0.9, "mudancas_jornada": []}
+PARAMETROS_PADRAO = {"horas_semana": 44.0, "dias_semana": 5, "rendimento": 0.9, "mudancas_jornada": [],
+                     "volume_caminhao": 8.0, "caminhoes_dia": 3.0, "juntar": None}
 
 
 def chave(texto: Any) -> str:
@@ -110,7 +124,7 @@ def chave(texto: Any) -> str:
 
 
 class BancoCoeficientes:
-    """Consulta em memória do banco de coeficientes (manual tem preferência sobre planilha)."""
+    """Consulta em memória do banco de coeficientes (manual → planilha → SINAPI importado)."""
 
     def __init__(self, linhas: list[dict[str, Any]]):
         # conjuntos completos: (base, codigo, origem) -> {funcao: h}, com a data da gravação
@@ -130,7 +144,7 @@ class BancoCoeficientes:
     def _escolher(origens: dict[str, dict[str, float]] | None) -> dict[str, float] | None:
         if not origens:
             return None
-        valores = origens.get("manual") or origens.get("planilha")
+        valores = origens.get("manual") or origens.get("planilha") or origens.get("sinapi")
         return {f: h for f, h in (valores or {}).items() if h} or None
 
     def buscar(self, base: Any, codigo: Any) -> dict[str, float] | None:
@@ -175,18 +189,24 @@ class MaoDeObraMixin:
         if r is None:
             return dict(PARAMETROS_PADRAO)
         return {"horas_semana": r["horas_semana"], "dias_semana": r["dias_semana"], "rendimento": r["rendimento"],
-                "mudancas_jornada": json.loads(r["mudancas_jornada"] or "[]")}
+                "mudancas_jornada": json.loads(r["mudancas_jornada"] or "[]"),
+                "volume_caminhao": r["volume_caminhao"] or PARAMETROS_PADRAO["volume_caminhao"],
+                "caminhoes_dia": r["caminhoes_dia"] or PARAMETROS_PADRAO["caminhoes_dia"],
+                "juntar": json.loads(r["juntar"]) if r["juntar"] is not None else None}
 
     def salvar_parametros(self, obra_id: int, p: dict[str, Any]) -> None:
         with closing(self._conectar()) as con, con:
             con.execute(
-                """INSERT INTO obra_parametros (obra_id, horas_semana, dias_semana, rendimento, mudancas_jornada)
-                   VALUES (?,?,?,?,?)
+                """INSERT INTO obra_parametros (obra_id, horas_semana, dias_semana, rendimento, mudancas_jornada,
+                       volume_caminhao, caminhoes_dia, juntar)
+                   VALUES (?,?,?,?,?,?,?,?)
                    ON CONFLICT (obra_id) DO UPDATE SET horas_semana = excluded.horas_semana,
                        dias_semana = excluded.dias_semana, rendimento = excluded.rendimento,
-                       mudancas_jornada = excluded.mudancas_jornada""",
+                       mudancas_jornada = excluded.mudancas_jornada, volume_caminhao = excluded.volume_caminhao,
+                       caminhoes_dia = excluded.caminhoes_dia, juntar = excluded.juntar""",
                 (obra_id, p["horas_semana"], p["dias_semana"], p["rendimento"],
-                 json.dumps(p.get("mudancas_jornada") or [])),
+                 json.dumps(p.get("mudancas_jornada") or []), p.get("volume_caminhao"), p.get("caminhoes_dia"),
+                 json.dumps(p["juntar"], ensure_ascii=False) if p.get("juntar") is not None else None),
             )
 
     # ------------------------------------------------------------------ análise por serviço
@@ -280,7 +300,8 @@ class MaoDeObraMixin:
         with closing(self._conectar()) as con:
             linhas = con.execute("SELECT * FROM atividade_execucao WHERE obra_id = ?", (obra_id,)).fetchall()
             maquinas = con.execute("SELECT * FROM atividade_equipamento WHERE obra_id = ?", (obra_id,)).fetchall()
-        res = {l["atividade"]: {k: l[k] for k in ("execucao", "rendimento", "equipe_padrao", "duracao_manual")} for l in linhas}
+        res = {l["atividade"]: {k: l[k] for k in ("execucao", "rendimento", "equipe_padrao", "duracao_manual",
+                                                   "producao_dia", "maquinas_max")} for l in linhas}
         for m in maquinas:
             res.setdefault(m["atividade"], {}).setdefault("maquinas", {})[m["equipamento"]] = m["quantidade"]
         return res
@@ -301,7 +322,8 @@ class MaoDeObraMixin:
                             [(obra_id, c, e) for c, e in padroes.items()])
 
     def atualizar_execucao(self, obra_id: int, atividade: str, **campos: Any) -> None:
-        validos = {k: v for k, v in campos.items() if k in ("execucao", "rendimento", "equipe_padrao", "duracao_manual")}
+        validos = {k: v for k, v in campos.items() if k in ("execucao", "rendimento", "equipe_padrao", "duracao_manual",
+                                                            "producao_dia", "maquinas_max")}
         if not validos:
             return
         with closing(self._conectar()) as con, con:
@@ -336,6 +358,15 @@ class MaoDeObraMixin:
             res.append(d)
         return res
 
+    def producao_padrao(self) -> dict[str, dict[str, Any]]:
+        with closing(self._conectar()) as con:
+            return {r["atividade"]: dict(r) for r in con.execute("SELECT * FROM producao_padrao")}
+
+    def lembrar_producao(self, atividade: str, producao: float, unidade: str | None) -> None:
+        with closing(self._conectar()) as con, con:
+            con.execute("INSERT OR REPLACE INTO producao_padrao VALUES (?,?,?,?)",
+                        (atividade, producao, unidade, datetime.now().isoformat(timespec="seconds")))
+
     # ------------------------------------------------------------------ banco de coeficientes
 
     def consulta_coeficientes(self) -> BancoCoeficientes:
@@ -353,6 +384,19 @@ class MaoDeObraMixin:
                 "INSERT INTO banco_coeficientes VALUES (?,?,?,?,?,?,?,?)",
                 [(chave(base), chave(codigo), f, h, obra_id, agora, origem, descricao) for f, h in horas.items() if h > 0],
             )
+
+    def gravar_coeficientes_lote(self, base: str, composicoes: dict[str, dict[str, float]], origem: str,
+                                 descricao: str | None = None) -> int:
+        """Grava muitas composições de uma vez (importação do SINAPI). Retorna quantas."""
+        agora = datetime.now().isoformat(timespec="microseconds")
+        with closing(self._conectar()) as con, con:
+            con.execute("DELETE FROM banco_coeficientes WHERE base = ? AND origem = ?", (chave(base), origem))
+            con.executemany(
+                "INSERT INTO banco_coeficientes VALUES (?,?,?,?,?,?,?,?)",
+                [(chave(base), chave(cod), f, h, None, agora, origem, descricao)
+                 for cod, horas in composicoes.items() for f, h in horas.items() if h > 0],
+            )
+        return len(composicoes)
 
     def listar_coeficientes(self, codigo: Any = None) -> list[dict[str, Any]]:
         with closing(self._conectar()) as con:

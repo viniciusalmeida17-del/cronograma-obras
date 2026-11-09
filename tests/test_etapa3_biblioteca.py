@@ -17,7 +17,11 @@ def test_biblioteca_padrao_carrega(biblioteca):
     assert len(biblioteca.regras) == 89
     assert "TOTAL" not in biblioteca.atividades
     fun05 = biblioteca.atividades["FUN-05"]
-    assert fun05.depende_de == [Dependencia("FUN-04", 3)]
+    assert fun05.depende_de == [Dependencia("FUN-04", 3, "II", "du")]
+    assert biblioteca.atividades["QUA-03"].depende_de[0] == Dependencia("QUA-02", 28)
+    assert biblioteca.atividades["EST-03"].duracao_fixa_dias == 28
+    assert biblioteca.atividades["FUN-04"].tipo_producao == "concretagem"
+    assert biblioteca.atividades["PRE-01"].equipe_max == 20  # vazio = 20
     assert fun05.tipo == "rigida"
     assert biblioteca.atividades["IND-03"].periodo_de == "TER-01"
     assert biblioteca.atividades["IND-03"].periodo_ate == "FUN-04"
@@ -48,6 +52,9 @@ def test_regras_lidas(biblioteca):
         ("PRE-03, PRE-04", [Dependencia("PRE-03"), Dependencia("PRE-04")]),
         ("SPDA-01", [Dependencia("SPDA-01")]),
         (" pis-01 + 7D ", [Dependencia("PIS-01", 7)]),
+        ("FUN-02:II+3du", [Dependencia("FUN-02", 3, "II", "du")]),
+        ("FUN-02:TI+2du, QUA-02+28d", [Dependencia("FUN-02", 2, "TI", "du"), Dependencia("QUA-02", 28, "TI", "d")]),
+        ("fun-02:ii", [Dependencia("FUN-02", 0, "II")]),
         (None, []),
     ],
 )
@@ -56,7 +63,7 @@ def test_interpretar_dependencias(texto, esperado):
     assert erros == [] and deps == esperado
 
 
-@pytest.mark.parametrize("texto", ["FUN04", "FUN-04+3", "FUN-04+3 dias", "FUN-04-3d", "FUN-4"])
+@pytest.mark.parametrize("texto", ["FUN04", "FUN-04+3", "FUN-04+3 dias", "FUN-04-3d", "FUN-4", "FUN-04:IF+2d", "FUN-04:II+2h"])
 def test_dependencia_formato_invalido(texto):
     _, erros = interpretar_dependencias(texto)
     assert erros
@@ -145,5 +152,5 @@ def test_salvar_na_biblioteca_recusa_ciclo(tmp_path):
     with pytest.raises(ErroBiblioteca) as exc:
         salvar_atividade_na_biblioteca("LOC-01", "rigida", [Dependencia("FUN-02")], caminho)
     assert "Ciclo" in str(exc.value)
-    assert carregar_biblioteca(caminho).atividades["LOC-01"].depende_de == [Dependencia("TER-01")]
+    assert carregar_biblioteca(caminho).atividades["LOC-01"].depende_de == [Dependencia("TER-01", 10, "II", "du")]
     assert not (tmp_path / "backup").exists()
