@@ -267,7 +267,7 @@ def criar_app(
     @app.post("/api/obras/<int:obra_id>/atividade/<codigo>")
     def atividade_obra(obra_id, codigo):
         dados = request.get_json(silent=True) or {}
-        campos = {k: dados[k] for k in ("rendimento", "equipe_padrao", "duracao_manual") if k in dados}
+        campos = {k: dados[k] for k in ("rendimento", "equipe_padrao", "duracao_manual", "maquinas") if k in dados}
         try:
             etapa4.definir_atividade(banco, obra_id, codigo, biblioteca=_biblioteca_opcional(), **campos)
         except ValueError:

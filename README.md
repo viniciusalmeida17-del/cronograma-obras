@@ -100,7 +100,8 @@ Variáveis opcionais: `PORTA` (padrão 5000), `CRONOGRAMA_BANCO` (padrão `crono
 4. **Própria × terceirizada**: valor inicial da coluna `execucao_padrao`; as `perguntar` precisam de resposta
    (com "aplicar à etapa inteira"). Terceirizada continua com horas para a duração, mas sai do resumo por função.
 5. **Duração** (dias úteis, para cima): função principal com `equipe_padrao` pessoas; as outras na proporção
-   (mínimo 1); maior entre funções e equipamentos (1 máquina de cada). `duracao_fixa_dias` = dias corridos.
+   (mínimo 1); maior entre funções e equipamentos (horas ÷ (máquinas × horas/dia); 1 máquina de cada por padrão,
+   editável por equipamento em cada atividade, de 1 a 20). `duracao_fixa_dias` = dias corridos.
    Sem horas (ex.: terceirizada sem composição) = duração digitada, pendência obrigatória antes da etapa 5.
 6. **Resumo**: equipe indireta (fixa durante toda a obra e por período), horas ajustadas por função com a média
    de pessoas no prazo da licitação, cobertura por origem e lista de pendências.

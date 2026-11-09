@@ -186,13 +186,18 @@ function detalheAtividade(a, servs) {
   const c = a.calculo;
   const equipe = c ? Object.entries(c.equipe).map(([f, n]) => `${n} ${esc(f)} (${fmtH.format(c.dias_por_funcao[f])} d)`).join(" · ") : "—";
   const maquinas = c && Object.keys(c.dias_por_equipamento).length
-    ? Object.entries(c.dias_por_equipamento).map(([e, dd]) => `${esc(e.slice(0, 60))}: ${fmtH.format(dd)} d`).join(" · ") : "";
+    ? Object.entries(c.dias_por_equipamento).map(([e, dd]) => `${c.maquinas[e]}× ${esc(e.slice(0, 60))}: ${fmtH.format(dd)} d`).join(" · ") : "";
   return `<tr class="detalhe"><td colspan="8">
     <form class="form-atividade" data-codigo="${a.codigo}">
       <label>Equipe padrão (${esc(a.funcao_principal || "função principal")})
         <input type="number" name="equipe_padrao" min="1" max="${a.equipe_max}" value="${a.equipe_padrao}"> <small>máx. ${a.equipe_max}</small></label>
       <label>Rendimento desta atividade (%)
         <input type="number" name="rendimento" min="30" max="150" placeholder="${Math.round(est.d.parametros.rendimento * 100)} (obra)" value="${a.rendimento_especifico ? Math.round(a.rendimento_especifico * 1000) / 10 : ""}"></label>
+      ${Object.keys(a.horas_equipamento).length ? `<fieldset class="maquinas"><legend>Máquinas de cada equipamento</legend>
+        ${Object.entries(a.horas_equipamento).map(([e, h]) => `<label class="inline" title="${esc(e)}">
+          <input type="number" name="maquina" min="1" max="20" step="1" data-equip="${esc(e)}" value="${(c && c.maquinas && c.maquinas[e]) || 1}">
+          <span>${esc(e.length > 70 ? e.slice(0, 70) + "…" : e)} <small>(${horas(h)} h)</small></span></label>`).join("")}
+      </fieldset>` : ""}
       <label>Duração manual (dias úteis)
         <input type="number" name="duracao_manual" min="1" step="1" value="${a.duracao_manual ?? ""}" placeholder="${a.duracao && a.duracao.tipo !== "manual" ? a.duracao.dias : "obrigatória"}"></label>
       <button type="submit" class="primario">Aplicar</button>
@@ -246,9 +251,14 @@ $("#tabela-atividades").addEventListener("submit", (e) => {
   const f = e.target.closest(".form-atividade");
   if (!f) return;
   e.preventDefault();
+  const maquinas = {};
+  $$("[name=maquina]", f).forEach((i) => { maquinas[i.dataset.equip] = i.value; });
   chamar(`/api/obras/${obraId}/atividade/${f.dataset.codigo}`, { json: {
-    equipe_padrao: f.equipe_padrao.value, rendimento: f.rendimento.value, duracao_manual: f.duracao_manual.value,
-  } }, $(".msg-ativ", f), `${f.dataset.codigo} atualizada.`);
+    equipe_padrao: f.equipe_padrao.value, rendimento: f.rendimento.value, duracao_manual: f.duracao_manual.value, maquinas,
+  } }, $(".msg-ativ", f), "").then((ok) => {
+    // a tabela é redesenhada (o formulário some e volta): a confirmação vai para o topo; erros ficam no formulário
+    if (ok) mensagem($("#msg-geral"), `${f.dataset.codigo} atualizada: duração recalculada.`, "ok");
+  });
 });
 
 /* ------------------------------------------------------------ horas digitadas */

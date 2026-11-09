@@ -286,3 +286,7 @@ details.pendentes-sub table { font-size: 12px; background: #fff; }
 #form-horas input[name=funcao] { width: 220px; }
 #form-horas input[name=horas] { width: 120px; text-align: right; }
 @media (max-width: 800px) { .grade-duas { grid-template-columns: 1fr; } }
+
+fieldset.maquinas { flex-basis: 100%; display: flex; flex-direction: column; gap: 4px; }
+fieldset.maquinas label { font-weight: 400; }
+fieldset.maquinas input { width: 64px; }

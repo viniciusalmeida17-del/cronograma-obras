@@ -130,6 +130,7 @@ COLUNAS_OBRA_ATIVIDADE = (
 MIGRACOES = {
     "servicos": {"status_ligacao": "TEXT", "regra_usada": "INTEGER", "origem_horas": "TEXT"},
     "obras": {"arquivo_salvo": "TEXT", "composicoes_abas": "TEXT"},
+    "atividade_resumo": {"maquinas": "TEXT"},
     "obra_atividades": {"execucao_padrao": "TEXT", "equipe_padrao": "INTEGER", "equipe_max": "INTEGER",
                         "duracao_fixa_dias": "INTEGER"},
 }

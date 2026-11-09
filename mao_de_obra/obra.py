@@ -203,11 +203,13 @@ def definir_execucao(banco: Banco, obra_id: int, codigos: Iterable[str], execuca
 
 
 _NADA = object()
+MAQUINAS_MAX = 20
 
 
 def definir_atividade(banco: Banco, obra_id: int, codigo: str, rendimento: Any = _NADA, equipe_padrao: Any = _NADA,
-                      duracao_manual: Any = _NADA, biblioteca: Biblioteca | None = None) -> None:
-    """Rendimento específico, equipe padrão e duração manual da atividade nesta obra (None limpa)."""
+                      duracao_manual: Any = _NADA, biblioteca: Biblioteca | None = None,
+                      maquinas: dict[str, Any] | None = None) -> None:
+    """Rendimento específico, equipe padrão, duração manual (None limpa) e máquinas por equipamento da atividade."""
     atividades = atividades_da_obra(banco, obra_id, biblioteca)
     if codigo not in atividades or atividades[codigo]["tipo"] == INDIRETA:
         raise ErroMaoDeObra(f"Atividade {codigo} não está na sequência desta obra.")
@@ -238,7 +240,18 @@ def definir_atividade(banco: Banco, obra_id: int, codigo: str, rendimento: Any =
             if d <= 0 or d != int(d):
                 raise ErroMaoDeObra("A duração deve ser um número inteiro de dias úteis, maior que zero.")
             campos["duracao_manual"] = int(d)
+    quantidades: dict[str, int] = {}
+    for equip, n in (maquinas or {}).items():
+        try:
+            v = float(n) if n not in (None, "") else 1.0
+        except (TypeError, ValueError):
+            raise ErroMaoDeObra(f"Quantidade de máquinas inválida para {equip}.")
+        if v != int(v) or not 1 <= v <= MAQUINAS_MAX:
+            raise ErroMaoDeObra(f"Quantidade de máquinas de {equip} deve ser um número inteiro entre 1 e {MAQUINAS_MAX}.")
+        quantidades[str(equip)] = int(v)
     banco.atualizar_execucao(obra_id, codigo, **campos)
+    if quantidades:
+        banco.gravar_maquinas(obra_id, codigo, quantidades)
 
 
 def _validar_horas(horas: dict[str, Any]) -> dict[str, float]:

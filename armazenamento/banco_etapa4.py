@@ -63,6 +63,14 @@ CREATE TABLE IF NOT EXISTS atividade_execucao (
     PRIMARY KEY (obra_id, atividade)
 );
 
+CREATE TABLE IF NOT EXISTS atividade_equipamento (
+    obra_id               INTEGER NOT NULL REFERENCES obras(id) ON DELETE CASCADE,
+    atividade             TEXT NOT NULL,
+    equipamento           TEXT NOT NULL,
+    quantidade            INTEGER NOT NULL,   -- máquinas na obra ao mesmo tempo (padrão 1, sem linha)
+    PRIMARY KEY (obra_id, atividade, equipamento)
+);
+
 CREATE TABLE IF NOT EXISTS atividade_resumo (
     obra_id               INTEGER NOT NULL REFERENCES obras(id) ON DELETE CASCADE,
     atividade             TEXT NOT NULL,
@@ -72,6 +80,7 @@ CREATE TABLE IF NOT EXISTS atividade_resumo (
     horas_ajustadas       TEXT,               -- JSON funcao -> horas
     horas_equipamento     TEXT,               -- JSON equipamento -> horas
     equipe                TEXT,               -- JSON funcao -> pessoas (equipe padrão)
+    maquinas              TEXT,               -- JSON equipamento -> quantidade de máquinas
     duracao_dias          INTEGER,
     duracao_unidade       TEXT,               -- uteis ou corridos
     duracao_tipo          TEXT,               -- calculada, fixa, manual
@@ -269,7 +278,20 @@ class MaoDeObraMixin:
     def carregar_execucao(self, obra_id: int) -> dict[str, dict[str, Any]]:
         with closing(self._conectar()) as con:
             linhas = con.execute("SELECT * FROM atividade_execucao WHERE obra_id = ?", (obra_id,)).fetchall()
-        return {l["atividade"]: {k: l[k] for k in ("execucao", "rendimento", "equipe_padrao", "duracao_manual")} for l in linhas}
+            maquinas = con.execute("SELECT * FROM atividade_equipamento WHERE obra_id = ?", (obra_id,)).fetchall()
+        res = {l["atividade"]: {k: l[k] for k in ("execucao", "rendimento", "equipe_padrao", "duracao_manual")} for l in linhas}
+        for m in maquinas:
+            res.setdefault(m["atividade"], {}).setdefault("maquinas", {})[m["equipamento"]] = m["quantidade"]
+        return res
+
+    def gravar_maquinas(self, obra_id: int, atividade: str, maquinas: dict[str, int]) -> None:
+        """Quantidade de máquinas por equipamento da atividade (1 = padrão, não precisa de linha)."""
+        with closing(self._conectar()) as con, con:
+            for equip, n in maquinas.items():
+                con.execute("DELETE FROM atividade_equipamento WHERE obra_id = ? AND atividade = ? AND equipamento = ?",
+                            (obra_id, atividade, equip))
+                if n and n != 1:
+                    con.execute("INSERT INTO atividade_equipamento VALUES (?,?,?,?)", (obra_id, atividade, equip, n))
 
     def iniciar_execucao(self, obra_id: int, padroes: dict[str, str | None]) -> None:
         """Cria a linha de execução das atividades que ainda não têm (não mexe nas existentes)."""
@@ -290,11 +312,14 @@ class MaoDeObraMixin:
         with closing(self._conectar()) as con, con:
             con.execute("DELETE FROM atividade_resumo WHERE obra_id = ?", (obra_id,))
             con.executemany(
-                "INSERT INTO atividade_resumo VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                """INSERT INTO atividade_resumo (obra_id, atividade, execucao, funcao_principal, horas_brutas,
+                       horas_ajustadas, horas_equipamento, equipe, maquinas, duracao_dias, duracao_unidade, duracao_tipo)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                 [(obra_id, a["codigo"], a["execucao"], a["funcao_principal"],
                   json.dumps(a["horas_brutas"], ensure_ascii=False), json.dumps(a["horas_ajustadas"], ensure_ascii=False),
                   json.dumps(a["horas_equipamento"], ensure_ascii=False),
                   json.dumps((a["calculo"] or {}).get("equipe") or {}, ensure_ascii=False),
+                  json.dumps((a["calculo"] or {}).get("maquinas") or {}, ensure_ascii=False),
                   (a["duracao"] or {}).get("dias"), (a["duracao"] or {}).get("unidade"), (a["duracao"] or {}).get("tipo"))
                  for a in atividades],
             )
@@ -305,7 +330,7 @@ class MaoDeObraMixin:
         res = []
         for l in linhas:
             d = dict(l)
-            for k in ("horas_brutas", "horas_ajustadas", "horas_equipamento", "equipe"):
+            for k in ("horas_brutas", "horas_ajustadas", "horas_equipamento", "equipe", "maquinas"):
                 d[k] = json.loads(d[k] or "{}")
             res.append(d)
         return res

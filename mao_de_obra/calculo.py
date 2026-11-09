@@ -33,13 +33,14 @@ def calcular_duracao(
     horas_equipamento: Mapping[str, float],
     equipe_padrao: int,
     horas_dia: float,
+    maquinas: Mapping[str, int] | None = None,
 ) -> dict[str, Any] | None:
     """Duração (dias úteis) com a equipe padrão. None se não houver horas.
 
     Função principal = a de mais horas; ela recebe `equipe_padrao` pessoas; cada outra função
     recebe teto(equipe_padrao × horas da função ÷ horas da principal), mínimo 1.
     Duração = maior entre as funções (horas ÷ (pessoas × horas/dia)) e os equipamentos
-    (horas ÷ horas/dia, uma máquina de cada), arredondada para cima.
+    (horas ÷ (máquinas × horas/dia); padrão 1 máquina de cada), arredondada para cima.
     """
     horas = {f: h for f, h in horas_ajustadas.items() if h > 0}
     equip = {e: h for e, h in horas_equipamento.items() if h > 0}
@@ -54,7 +55,9 @@ def calcular_duracao(
         for f, h in horas.items():
             equipe[f] = equipe_padrao if f == principal else max(1, _teto(equipe_padrao * h / hp))
             dias_funcao[f] = h / (equipe[f] * horas_dia)
-    dias_equip = {e: h / horas_dia for e, h in equip.items()}
+    maquinas = maquinas or {}
+    qtd_maquinas = {e: max(1, int(maquinas.get(e) or 1)) for e in equip}
+    dias_equip = {e: h / (qtd_maquinas[e] * horas_dia) for e, h in equip.items()}
     dias_pessoas = max(dias_funcao.values(), default=0.0)
     dias_maquinas = max(dias_equip.values(), default=0.0)
     limitante = "equipamento" if dias_maquinas > dias_pessoas else "mao_de_obra"
@@ -63,6 +66,7 @@ def calcular_duracao(
         "equipe": equipe,
         "dias_por_funcao": {f: round(d, 2) for f, d in dias_funcao.items()},
         "dias_por_equipamento": {e: round(d, 2) for e, d in dias_equip.items()},
+        "maquinas": qtd_maquinas,
         "dias_exatos": round(max(dias_pessoas, dias_maquinas), 4),
         "dias": _teto(max(dias_pessoas, dias_maquinas)),
         "limitante": limitante,
@@ -218,7 +222,7 @@ def calcular_obra(
         rendimento = ex.get("rendimento") or params["rendimento"]
         ajustadas = {f: h / rendimento for f, h in brutas.items()}
         equipe_padrao = int(ex.get("equipe_padrao") or ativ.get("equipe_padrao") or EQUIPE_PADRAO)
-        calc = calcular_duracao(ajustadas, equip, equipe_padrao, hd)
+        calc = calcular_duracao(ajustadas, equip, equipe_padrao, hd, ex.get("maquinas"))
         execucao_escolhida = ex.get("execucao")
 
         if ex.get("duracao_manual"):
