@@ -18,9 +18,6 @@ class ErroMaoDeObra(Exception):
     pass
 
 
-# padrão da aba Juntar funções na etapa 5.1, antes de existir a versão da tabela gravada por obra
-JUNTAR_PADRAO_ETAPA_51 = {"Carpinteiro": "Pedreiro", "Armador": "Pedreiro"}
-
 CAMPOS_NOVOS = ("execucao_padrao", "equipe_padrao", "equipe_max", "duracao_fixa_dias", "tipo_producao")
 
 
@@ -63,7 +60,6 @@ def analisar_obra(
     atividades = atividades_da_obra(banco, obra_id, biblioteca)
     funcoes = funcoes or carregar_funcoes()
     palavras = palavras if palavras is not None else carregar_palavras_subcomposicao()
-    _atualizar_juntar(banco, obra_id, funcoes)
 
     lidas = ler_composicoes(arquivo, dados["obra"].get("aba"))
     servicos = dados["servicos"]
@@ -74,7 +70,6 @@ def analisar_obra(
     banco.gravar_analises(obra_id, analises)
     banco.gravar_custos_mao_de_obra(analises)
     banco.gravar_abas_composicoes(obra_id, lidas.resumo_abas())
-    banco.gravar_versao_funcoes(obra_id, {"assinatura": funcoes.assinatura, "juntar_padrao": funcoes.juntar_padrao})
 
     # banco de coeficientes: horas lidas das composições desta planilha, por base + código
     for s in servicos:
@@ -104,10 +99,10 @@ def estado_mao_de_obra(banco: Banco, obra_id: int, biblioteca: Biblioteca | None
     if not analises:
         raise ErroMaoDeObra("A mão de obra desta obra ainda não foi calculada.")
     tabela = carregar_funcoes()
-    versao = banco.versao_funcoes(obra_id)
-    if (versao is None or versao.get("assinatura") != tabela.assinatura) \
+    conhecidas = set(tabela.funcoes())
+    if any(h["funcao"] not in conhecidas and h["origem"] != MANUAL for a in analises.values() for h in a["horas"]) \
             and banco.arquivo_da_obra(obra_id) and not _reprocessando.get(obra_id):
-        # a funcoes.xlsx mudou desde a última análise (ex.: Ajudante de eletricista voltou a ser função): reprocessa
+        # a tabela de funções mudou (ex.: "Auxiliar de eletricista" deixou de existir): reprocessa a obra
         _reprocessando[obra_id] = True
         try:
             return analisar_obra(banco, obra_id, biblioteca, tabela)
@@ -220,15 +215,6 @@ def _json(texto: Any) -> Any:
 _RE_DATA = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
-def _atualizar_juntar(banco: Banco, obra_id: int, tabela: TabelaFuncoes) -> None:
-    """Obra que só seguia o padrão antigo do juntar volta a seguir o padrão (o atual); escolha diferente fica."""
-    versao = banco.versao_funcoes(obra_id)
-    padrao_antigo = versao.get("juntar_padrao") if versao else JUNTAR_PADRAO_ETAPA_51
-    p = banco.carregar_parametros(obra_id)
-    if p.get("juntar") is not None and p["juntar"] == padrao_antigo and padrao_antigo != tabela.juntar_padrao:
-        banco.salvar_parametros(obra_id, {**p, "juntar": None})
-
-
 def salvar_parametros(banco: Banco, obra_id: int, dados: dict[str, Any]) -> None:
     atual = banco.carregar_parametros(obra_id)
     p = {**atual, **{k: v for k, v in dados.items() if k in atual and k != "juntar"}}
@@ -267,8 +253,7 @@ def salvar_parametros(banco: Banco, obra_id: int, dados: dict[str, Any]) -> None
         if not 0 < p[campo] <= 100:
             raise ErroMaoDeObra(f"{nome} deve ser maior que zero.")
     if "juntar" in dados:
-        tabela = carregar_funcoes()
-        possivel = tabela.juntar_possivel
+        possivel = carregar_funcoes().juntar_possivel
         juntar = {}
         for f, destino in (dados["juntar"] or {}).items():
             if not destino:
@@ -276,8 +261,7 @@ def salvar_parametros(banco: Banco, obra_id: int, dados: dict[str, Any]) -> None
             if possivel.get(f) != destino:
                 raise ErroMaoDeObra(f"{f} não pode ser juntada com {destino} (veja a aba Juntar funções da funcoes.xlsx).")
             juntar[f] = destino
-        # igual ao padrão da funcoes.xlsx: grava "segue o padrão", para acompanhar se a tabela mudar
-        p["juntar"] = None if juntar == tabela.juntar_padrao else juntar
+        p["juntar"] = juntar
     banco.salvar_parametros(obra_id, p)
 
 

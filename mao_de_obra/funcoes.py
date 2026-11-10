@@ -1,8 +1,6 @@
 """Tabela de funções (dados/funcoes.xlsx): quais linhas das composições são mão de obra, e de qual função."""
 from __future__ import annotations
 
-import hashlib
-import json
 import os
 import re
 from dataclasses import dataclass, field
@@ -67,14 +65,6 @@ class TabelaFuncoes:
 
     def funcoes(self) -> list[str]:
         return list(dict.fromkeys(r.funcao for r in self.regras))
-
-    @property
-    def assinatura(self) -> str:
-        """Muda quando o conteúdo da tabela muda (regras ou aba Juntar funções): as obras salvas são reprocessadas."""
-        conteudo = json.dumps([[(r.ordem, r.termos, r.funcao, r.categoria) for r in self.regras],
-                               sorted(self.juntar_possivel.items()), sorted(self.juntar_padrao.items())],
-                              ensure_ascii=False)
-        return hashlib.sha1(conteudo.encode("utf-8")).hexdigest()[:16]
 
 
 def carregar_funcoes(caminho: str | os.PathLike | None = None) -> TabelaFuncoes:

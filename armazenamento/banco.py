@@ -30,8 +30,7 @@ CREATE TABLE IF NOT EXISTS obras (
     colunas             TEXT,            -- mapeamento JSON campo -> letra
     data_importacao     TEXT,
     arquivo_salvo       TEXT,            -- cópia do .xlsx (etapa 4 lê as composições dele)
-    composicoes_abas    TEXT,            -- JSON: abas onde foram achadas composições
-    versao_funcoes      TEXT             -- JSON: assinatura da funcoes.xlsx usada na última análise
+    composicoes_abas    TEXT             -- JSON: abas onde foram achadas composições
 );
 
 CREATE TABLE IF NOT EXISTS grupos (
@@ -134,7 +133,7 @@ COLUNAS_OBRA_ATIVIDADE = (
 # Colunas acrescentadas depois da etapa 2 (migração de bancos antigos)
 MIGRACOES = {
     "servicos": {"status_ligacao": "TEXT", "regra_usada": "INTEGER", "origem_horas": "TEXT"},
-    "obras": {"arquivo_salvo": "TEXT", "composicoes_abas": "TEXT", "versao_funcoes": "TEXT"},
+    "obras": {"arquivo_salvo": "TEXT", "composicoes_abas": "TEXT"},
     "atividade_resumo": {"maquinas": "TEXT"},
     "atividade_execucao": {"equipe_travada": "INTEGER", "producao_dia": "REAL", "maquinas_max": "INTEGER"},
     "obra_parametros": {"volume_caminhao": "REAL", "caminhoes_dia": "REAL", "juntar": "TEXT"},

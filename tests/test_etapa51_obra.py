@@ -12,7 +12,6 @@ from cronograma import obra as etapa5
 from leitor_planilha import ler_planilha
 from mao_de_obra import obra as etapa4
 from mao_de_obra.calculo import aplicar_estimativas
-from mao_de_obra.funcoes import carregar_funcoes
 from test_etapa5_obra import INICIO, resolver_pendencias
 from web.app import criar_app
 
@@ -78,9 +77,7 @@ def test_juntar_na_fun03(obra51, biblioteca):
     assert sem["Pedreiro"] + sem["Carpinteiro"] + sem["Armador"] == pytest.approx(ligado["Pedreiro"], abs=0.05)
     with pytest.raises(etapa4.ErroMaoDeObra):
         etapa4.salvar_parametros(banco, obra, {"juntar": {"Pintor": "Pedreiro"}})  # não está na aba Juntar funções
-    # desligar = igual ao padrão: grava "segue o padrão da funcoes.xlsx"
     etapa4.salvar_parametros(banco, obra, {"juntar": {}})
-    assert banco.carregar_parametros(obra)["juntar"] is None
 
 
 def test_obra_com_funcoes_antigas_e_reprocessada(obra51, biblioteca):
@@ -88,42 +85,12 @@ def test_obra_com_funcoes_antigas_e_reprocessada(obra51, biblioteca):
 
     banco, obra = obra51
     sid = _serv(etapa4.estado_mao_de_obra(banco, obra, biblioteca), "9.1.1.1")["id"]
-
-    def como_na_tabela_antiga(versao):
-        # obra salva com a funcoes.xlsx da etapa 5.1: auxiliar de eletricista era Servente e o juntar vinha ligado
-        con = sqlite3.connect(banco.caminho)
-        with con:
-            con.execute("DELETE FROM servico_mao_de_obra WHERE servico_id = ?", (sid,))
-            con.execute("INSERT INTO servico_mao_de_obra VALUES (?, 'Eletricista', 0.029, 'composicao')", (sid,))
-            con.execute("INSERT INTO servico_mao_de_obra VALUES (?, 'Servente', 0.029, 'composicao')", (sid,))
-            con.execute("UPDATE obras SET versao_funcoes = ? WHERE id = ?", (versao, obra))
-        con.close()
-        p = banco.carregar_parametros(obra)
-        banco.salvar_parametros(obra, {**p, "juntar": {"Carpinteiro": "Pedreiro", "Armador": "Pedreiro"}})
-
-    # 1) banco de antes da versão da tabela (sem versao_funcoes); 2) versão gravada com outra assinatura
-    for versao in (None, '{"assinatura": "antiga", "juntar_padrao": {"Carpinteiro": "Pedreiro", "Armador": "Pedreiro"}}'):
-        como_na_tabela_antiga(versao)
-        est = etapa4.estado_mao_de_obra(banco, obra, biblioteca)  # a tabela mudou: reprocessa
-        assert {h["funcao"] for h in _serv(est, "9.1.1.1")["horas"]} == {"Eletricista", "Ajudante de eletricista"}
-        assert banco.carregar_parametros(obra)["juntar"] is None  # seguia o padrão antigo: passa a seguir o novo
-        assert est["juntar"]["obra"] == {}
-        assert banco.versao_funcoes(obra)["assinatura"] == carregar_funcoes().assinatura
-
-    # escolha do usuário diferente do padrão antigo é mantida
-    como_na_tabela_antiga('{"assinatura": "antiga", "juntar_padrao": {}}')
-    etapa4.estado_mao_de_obra(banco, obra, biblioteca)
-    assert banco.carregar_parametros(obra)["juntar"] == {"Carpinteiro": "Pedreiro", "Armador": "Pedreiro"}
-    etapa4.salvar_parametros(banco, obra, {"juntar": {}})
-
-    # tabela igual: não reprocessa (a hora digitada direto no banco continua lá)
     con = sqlite3.connect(banco.caminho)
     with con:
-        con.execute("UPDATE servico_mao_de_obra SET horas_un = 0.5 WHERE servico_id = ? AND funcao = 'Eletricista'", (sid,))
+        con.execute("INSERT OR REPLACE INTO servico_mao_de_obra VALUES (?, 'Auxiliar de eletricista', 0.029, 'composicao')", (sid,))
     con.close()
-    est = etapa4.estado_mao_de_obra(banco, obra, biblioteca)
-    assert next(h for h in _serv(est, "9.1.1.1")["horas"] if h["funcao"] == "Eletricista")["horas_un"] == pytest.approx(0.5)
-    etapa4.analisar_obra(banco, obra, biblioteca)
+    est = etapa4.estado_mao_de_obra(banco, obra, biblioteca)  # a função antiga não existe mais: reprocessa
+    assert {h["funcao"] for h in _serv(est, "9.1.1.1")["horas"]} == {"Eletricista", "Ajudante de eletricista"}
 
 
 # ------------------------------------------------------------------ referência e limite de estimativa

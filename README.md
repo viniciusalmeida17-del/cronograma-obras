@@ -182,9 +182,6 @@ Variáveis opcionais: `PORTA` (padrão 5000), `CRONOGRAMA_BANCO` (padrão `crono
   Ajudante de bombeiro, Eletricista, Ajudante de eletricista, Pintor (+ Operador/Motorista). Termos com `&` exigem as
   duas palavras (ex.: `AUXILIAR&ELETRICISTA`); os outros ajudantes viram Servente. Aba **Juntar funções**: Carpinteiro e
   Armador → Pedreiro é possível, mas desligado por padrão (liga por obra na tela de mão de obra).
-- **Obras salvas acompanham a `funcoes.xlsx`**: cada obra guarda a assinatura da tabela usada; quando a tabela muda, a obra
-  é reprocessada ao ser aberta. Se o "juntar" da obra era só o padrão antigo, passa a seguir o novo; escolha diferente
-  do padrão é mantida. Os cenários já calculados não mudam: recalcule na tela de cronograma.
 - **Horas**: composição → banco de coeficientes → **referência** (`produtividade_referencia.xlsx`) → estimado.
   Estimativa acima de 3 × a média da atividade é limitada e marcada em vermelho. Tela **Importar SINAPI**
   (tabela analítica da CAIXA, colunas pelo cabeçalho ou mapeamento manual). Terceirizadas: **produção por dia** calcula
