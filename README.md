@@ -41,6 +41,11 @@ Ele cria dois atalhos, na área de trabalho (a de verdade, mesmo se ela estiver 
 - **Atualizar Cronograma de Obras**: fecha o app se estiver aberto, faz `git pull`, instala o `requirements.txt` no
   `.venv` e mostra numa janela se deu certo (com as novidades) ou qual foi o erro.
 
+**Aviso de atualização:** ao abrir o app, ele confere no GitHub se há versão nova (no máximo a cada 10 minutos; sem
+internet, nada aparece). Se houver, surge uma faixa no topo com as novidades e os botões **Atualizar agora** e
+**Agora não** (esconde até fechar a aba). Atualizar agora roda o `windows\atualizar.ps1 -Reabrir`: o app fecha, atualiza,
+abre de novo e a página recarrega sozinha; se der erro, aparece uma janela com o motivo e o app abre na versão anterior.
+
 Para fechar o app, use o botão **Fechar o app** no topo de qualquer página. Se o app não conseguir abrir (falta o
 `.venv`, faltam pacotes, a porta 5000 está ocupada por outro programa), aparece uma janela com o motivo. Erros ficam em
 `logs\app.log` e o registro das atualizações em `logs\atualizacao.log` (a pasta `logs/` não vai para o git).
@@ -104,7 +109,7 @@ a pasta `arquivos_obras/` fica ao lado do banco),
 | `  sinapi.py` | (em `mao_de_obra/`) Importa a tabela analítica do SINAPI para o banco de coeficientes. |
 | `dados/` | `biblioteca_atividades.xlsx` (biblioteca padrão), `funcoes.xlsx` (funções e aba Juntar funções), `produtividade_referencia.xlsx` (coeficientes SINAPI pesquisados) e `palavras_subcomposicao.txt` (palavras que indicam serviço), todos editáveis. |
 | `armazenamento/` | SQLite: `obras`, `grupos`, `servicos` (com `atividade_biblioteca`, `status_ligacao`, `regra_usada`), `memoria_ligacoes`, `obra_atividades`, `obra_dependencias` as tabelas da etapa 4 (`armazenamento/banco_etapa4.py`) e as da etapa 5 (`armazenamento/banco_etapa5.py`: `obra_calendario`, `cenarios`, `cenario_atividades`, `cenario_equipe_semana`, `custos_hora_padrao`). Bancos antigos são migrados sozinhos. Uma cópia do .xlsx de cada obra fica em `arquivos_obras/`, ao lado do banco. |
-| `web/` | Servidor Flask local + telas (HTML/JS puro, sem build). `inicio.py`: caminhos, log, aviso em janela e "o app já está aberto?" (só biblioteca padrão); `atalho.py`: entrada do atalho do Windows. |
+| `web/` | Servidor Flask local + telas (HTML/JS puro, sem build). `inicio.py`: caminhos, log, aviso em janela e "o app já está aberto?" (só biblioteca padrão); `atalho.py`: entrada do atalho do Windows; `atualizacao.py`: confere se há versão nova (git fetch) e inicia a atualização. |
 | `windows/` | `criar_atalhos.ps1` (cria os atalhos), `abrir.vbs`, `atualizar.vbs` + `atualizar.ps1`, ícones (`gerar_icones.py` refaz os .ico). |
 | `tests/` | Testes com o arquivo da Concorrência 2/2024 e o CSV esperado em `tests/dados/`. |
 

@@ -27,6 +27,7 @@ from leitor_planilha import NATUREZAS, ErroLeitura, ler_planilha
 from mao_de_obra import obra as etapa4
 from mao_de_obra.funcoes import ErroFuncoes
 
+from . import atualizacao
 from .inicio import (HOST, NOME_APP, NOSSO, OUTRO, RAIZ, avisar, caminho_banco_padrao, configurar_log, porta_padrao,
                      preparar_saidas, verificar_porta)
 
@@ -43,6 +44,9 @@ def criar_app(
     app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
     app.config["CAMINHO_BANCO"] = caminho_banco or caminho_banco_padrao()
     app.config["AO_FECHAR"] = ao_fechar  # main() põe aqui o desligamento do servidor
+    app.config["VERIFICAR_ATUALIZACAO"] = atualizacao.verificar
+    app.config["INICIAR_ATUALIZACAO"] = atualizacao.iniciar_atualizacao_windows
+    versao: dict[str, Any] = {}
     banco = Banco(app.config["CAMINHO_BANCO"])
     uploads = Path(pasta_uploads or tempfile.mkdtemp(prefix="cronograma_uploads_"))
     uploads.mkdir(parents=True, exist_ok=True)
@@ -60,7 +64,31 @@ def criar_app(
     @app.get("/api/sobre")
     def sobre():
         # usado para saber se o app já está aberto nesta porta (clicar no atalho de novo só abre o navegador)
-        return jsonify({"app": NOME_APP, "pasta": str(RAIZ), "pid": os.getpid()})
+        if "valor" not in versao:
+            versao["valor"] = atualizacao.versao_atual()
+        return jsonify({"app": NOME_APP, "pasta": str(RAIZ), "pid": os.getpid(), "versao": versao["valor"]})
+
+    @app.get("/api/atualizacao")
+    def conferir_atualizacao():
+        # consulta o GitHub (git fetch) no máximo a cada 10 minutos; sem internet, só diz que não há
+        return jsonify(app.config["VERIFICAR_ATUALIZACAO"]())
+
+    @app.post("/api/atualizar")
+    def atualizar():
+        if request.headers.get("X-Atualizar") != "1":
+            return _erro("Pedido inválido.", 403)
+        if app.config.get("AO_FECHAR") is None:
+            return _erro("Para atualizar pela tela, abra o app pelo atalho Cronograma de Obras "
+                         "(ou use o atalho Atualizar Cronograma de Obras).", 409)
+        try:
+            app.config["INICIAR_ATUALIZACAO"]()
+        except NotImplementedError as exc:
+            return _erro(str(exc), 501)
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger("cronograma").exception("Falha ao iniciar a atualização")
+            return _erro(f"Não foi possível iniciar a atualização: {exc}", 500)
+        logging.getLogger("cronograma").info("Atualização pedida pela tela")
+        return jsonify({"ok": True})
 
     @app.post("/api/fechar")
     def fechar():

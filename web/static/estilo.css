@@ -382,3 +382,22 @@ table.comparacao .botoes-cenario { margin-top: 4px; white-space: nowrap; }
 .botao-fechar-app:disabled { opacity: .5; cursor: default; }
 .topo .link-topo[href="/sinapi"] + .botao-fechar-app { margin-left: 16px; }
 .cartao.fechado { max-width: 640px; margin: 40px auto; }
+
+/* faixa de atualização (abaixo do topo) */
+.faixa-atualizacao {
+  display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap; justify-content: space-between;
+  padding: 10px 24px; font-size: 14px; border-bottom: 1px solid var(--borda);
+}
+.faixa-atualizacao ul { margin: 4px 0 0; padding-left: 20px; }
+.faixa-atualizacao.nova { background: #fff6dd; color: #5c4400; }
+.faixa-atualizacao.andamento { background: #e6f0fb; color: #1f4e8c; align-items: center; justify-content: flex-start; }
+.faixa-atualizacao.ok { background: #e3f6ee; color: #0d6b4a; align-items: center; }
+.faixa-atualizacao.erro { background: #fde2e1; color: #a32424; align-items: center; }
+.faixa-atualizacao button { padding: 5px 12px; border-radius: 6px; border: 1px solid currentColor; background: #fff; color: inherit; cursor: pointer; }
+.faixa-atualizacao .atualizar-agora { background: #1f4e8c; color: #fff; border-color: #1f4e8c; }
+.acoes-faixa { display: flex; gap: 8px; align-self: center; }
+.girando {
+  width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%;
+  animation: girar .8s linear infinite;
+}
+@keyframes girar { to { transform: rotate(360deg); } }

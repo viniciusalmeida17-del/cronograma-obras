@@ -1,5 +1,8 @@
 ﻿# Atualiza o Cronograma de Obras: fecha o app se estiver aberto, faz git pull e instala o requirements.txt no .venv.
 # Mostra numa janela se deu certo ou qual foi o erro. Registro completo em logs\atualizacao.log.
+# -Reabrir: pedido pelo botão "Atualizar agora" da tela. Abre o app de novo no fim (a página recarrega sozinha)
+#           e só mostra janela se der erro.
+param([switch]$Reabrir)
 $ErrorActionPreference = 'Continue'
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 $env:PYTHONIOENCODING = 'utf-8'
@@ -35,9 +38,22 @@ function Rodar([string]$exe, [string[]]$argumentos) {
     return @{ Codigo = $codigo; Saida = $saida }
 }
 
+function Abrir-App {
+    # a aba que pediu a atualização recarrega sozinha: não abre outra
+    $env:ABRIR_NAVEGADOR = '0'
+    $vbs = Join-Path $raiz 'windows\abrir.vbs'
+    Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\wscript.exe') -ArgumentList ('"' + $vbs + '"')
+    Registrar 'App aberto de novo.'
+}
+
 function Falhou([string]$texto) {
     Registrar "ERRO: $texto"
-    Janela ($texto + "`n`nRegistro completo em logs\atualizacao.log.") 16
+    $extra = ''
+    if ($Reabrir) {
+        Abrir-App
+        $extra = "`n`nO app foi aberto de novo na versão anterior."
+    }
+    Janela ($texto + $extra + "`n`nRegistro completo em logs\atualizacao.log.") 16
     exit 1
 }
 
@@ -52,8 +68,8 @@ if (-not (Test-Path $python)) {
     Falhou "Não encontrei o ambiente do Python (.venv) em:`n$raiz`n`nCrie com os comandos da seção ""Windows (uma vez só)"" do README.md."
 }
 
-# avisa que começou (some sozinho em 4 segundos)
-[void]$shell.Popup("Atualizando... pode levar alguns minutos.`nAparece outra janela quando terminar.", 4, $titulo, 64)
+# avisa que começou (some sozinho em 4 segundos); pela tela, a própria página já avisa
+if (-not $Reabrir) { [void]$shell.Popup("Atualizando... pode levar alguns minutos.`nAparece outra janela quando terminar.", 4, $titulo, 64) }
 
 # o app aberto prende arquivos do .venv: fecha antes de instalar
 $fechouApp = $false
@@ -61,7 +77,11 @@ try {
     $sobre = Invoke-RestMethod -Uri "http://127.0.0.1:$porta/api/sobre" -TimeoutSec 2
     if ($sobre.app -eq 'cronograma-obras') {
         Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$porta/api/fechar" -Headers @{ 'X-Fechar' = '1' } -TimeoutSec 5 | Out-Null
-        Start-Sleep -Seconds 2
+        # espera o app terminar de fechar (até 15 s)
+        for ($i = 0; $i -lt 30; $i++) {
+            Start-Sleep -Milliseconds 500
+            try { Invoke-RestMethod -Uri "http://127.0.0.1:$porta/api/sobre" -TimeoutSec 1 | Out-Null } catch { break }
+        }
         $fechouApp = $true
         Registrar 'App aberto: fechado antes de atualizar.'
     }
@@ -85,6 +105,10 @@ if ($antes -eq $depois) {
     $novidades = (Rodar 'git' @('log', '--format=- %s', "$antes..$depois")).Saida
     $msg = "Atualizado com sucesso ($antes -> $depois).`n`nNovidades:`n" + (Final $novidades 900)
 }
-if ($fechouApp) { $msg += "`n`nO app estava aberto e foi fechado. Abra de novo pelo atalho." }
 Registrar 'Atualização concluída.'
-Janela $msg 64
+if ($Reabrir) {
+    Abrir-App
+} else {
+    if ($fechouApp) { $msg += "`n`nO app estava aberto e foi fechado. Abra de novo pelo atalho." }
+    Janela $msg 64
+}
