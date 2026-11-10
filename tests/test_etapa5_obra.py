@@ -251,8 +251,9 @@ def test_equipe_travada_na_obra(obra_pronta, biblioteca):
     banco, obra = obra_pronta
     etapa5.travar_equipe(banco, obra, "FUN-03", 3, biblioteca)
     inst, _ = etapa5.montar_instancia(banco, obra, 12, biblioteca)
-    # com "juntar" ligado, carpinteiro e armador viram pedreiro: a principal da FUN-03 é Pedreiro
-    assert len(inst.tarefas["FUN-03"].modos) == 1 and inst.tarefas["FUN-03"].modos[0].equipe["Pedreiro"] == 3
+    # carpinteiro e armador separados (juntar desligado por padrão): a principal da FUN-03 é Carpinteiro
+    assert inst.tarefas["FUN-03"].funcao_principal == "Carpinteiro"
+    assert len(inst.tarefas["FUN-03"].modos) == 1 and inst.tarefas["FUN-03"].modos[0].equipe["Carpinteiro"] == 3
     with pytest.raises(etapa5.ErroCronograma):
         etapa5.travar_equipe(banco, obra, "TER-01", 2, biblioteca)   # terceirizada
     with pytest.raises(etapa5.ErroCronograma):

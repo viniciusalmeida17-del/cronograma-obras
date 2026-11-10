@@ -177,6 +177,16 @@ class MaoDeObraMixin:
             return Path(r["arquivo_salvo"])
         return None
 
+    def versao_funcoes(self, obra_id: int) -> dict[str, Any] | None:
+        """Tabela de funções usada na última análise da obra: {"assinatura", "juntar_padrao"}; None = antes de existir."""
+        with closing(self._conectar()) as con:
+            r = con.execute("SELECT versao_funcoes FROM obras WHERE id = ?", (obra_id,)).fetchone()
+        return json.loads(r["versao_funcoes"]) if r and r["versao_funcoes"] else None
+
+    def gravar_versao_funcoes(self, obra_id: int, versao: dict[str, Any]) -> None:
+        with closing(self._conectar()) as con, con:
+            con.execute("UPDATE obras SET versao_funcoes = ? WHERE id = ?", (json.dumps(versao, ensure_ascii=False), obra_id))
+
     def gravar_abas_composicoes(self, obra_id: int, abas: list[dict[str, Any]]) -> None:
         with closing(self._conectar()) as con, con:
             con.execute("UPDATE obras SET composicoes_abas = ? WHERE id = ?", (json.dumps(abas, ensure_ascii=False), obra_id))

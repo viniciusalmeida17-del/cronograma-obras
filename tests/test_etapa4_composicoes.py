@@ -23,9 +23,9 @@ def _h(analise):
 
 
 def test_tabela_de_funcoes(tabela_funcoes):
-    assert len(tabela_funcoes.regras) == 37
+    assert len(tabela_funcoes.regras) == 43
     assert tabela_funcoes.identificar("AJUDANTE DE ARMADOR COM ENCARGOS COMPLEMENTARES").funcao == "Servente"
-    assert tabela_funcoes.identificar("AUXILIAR DE ELETRICISTA COM ENCARGOS").funcao == "Servente"
+    assert tabela_funcoes.identificar("AUXILIAR DE ELETRICISTA COM ENCARGOS").funcao == "Ajudante de eletricista"
     assert tabela_funcoes.identificar("ELETRICISTA COM ENCARGOS COMPLEMENTARES").funcao == "Eletricista"
     assert tabela_funcoes.identificar("LOCACAO VEICULO POPULAR (ENGENHEIRO E ENCARREGADO)") is None
     assert tabela_funcoes.identificar("TÉCNICO EM SEGURANÇA DO TRABALHO COM ENCARGOS").categoria == "indireta"
@@ -130,8 +130,8 @@ def test_item_4_5_ajudante_vira_servente(analise_por_item):
 
 
 def test_item_9_1_1_1(analise_por_item):
-    # auxiliar de eletricista agora é Servente (funções da empresa)
-    assert _h(analise_por_item["9.1.1.1"]) == {"Eletricista": pytest.approx(0.029), "Servente": pytest.approx(0.029)}
+    # auxiliar de eletricista é a função própria Ajudante de eletricista
+    assert _h(analise_por_item["9.1.1.1"]) == {"Eletricista": pytest.approx(0.029), "Ajudante de eletricista": pytest.approx(0.029)}
 
 
 def test_item_5_1_14_expande_subcomposicoes(analise_por_item):
