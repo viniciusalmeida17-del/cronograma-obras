@@ -226,6 +226,34 @@ class Banco(MaoDeObraMixin, CronogramaMixin):
             servicos = [dict(s) for s in con.execute("SELECT * FROM servicos WHERE obra_id = ? ORDER BY linha_excel", (obra_id,))]
         return {"obra": obra, "grupos": grupos, "servicos": servicos}
 
+    def atualizar_obra(self, obra_id: int, campos: dict[str, Any]) -> None:
+        """Altera dados da obra (nome, prazo, BDI, desoneração, referências)."""
+        permitidos = ("nome", "prazo_valor", "prazo_unidade", "bdi", "desoneracao", "referencias")
+        campos = {k: (json.dumps(v, ensure_ascii=False) if k == "referencias" else v)
+                  for k, v in campos.items() if k in permitidos}
+        if not campos:
+            return
+        with closing(self._conectar()) as con, con:
+            con.execute(f"UPDATE obras SET {', '.join(f'{k} = ?' for k in campos)} WHERE id = ?", (*campos.values(), obra_id))
+
+    def excluir_obras(self, ids: list[int]) -> list[Path]:
+        """Apaga as obras e tudo delas (as tabelas da obra apagam em cascata). Não mexe na memória das ligações
+        nem no banco de coeficientes. Devolve as cópias da planilha (em arquivos_obras) que devem ser apagadas."""
+        pasta = self.pasta_arquivos.resolve()
+        arquivos: list[Path] = []
+        with closing(self._conectar()) as con, con:
+            for obra_id in ids:
+                r = con.execute("SELECT arquivo_salvo FROM obras WHERE id = ?", (obra_id,)).fetchone()
+                candidatos = [pasta / f"obra_{obra_id}.xlsx"]
+                if r and r["arquivo_salvo"]:
+                    candidatos.append(Path(r["arquivo_salvo"]))
+                for c in candidatos:
+                    c = c.resolve()
+                    if c.parent == pasta and c not in arquivos:   # só dentro de arquivos_obras
+                        arquivos.append(c)
+                con.execute("DELETE FROM obras WHERE id = ?", (obra_id,))
+        return arquivos
+
     # ------------------------------------------------------------ etapa 3: ligação
 
     def gravar_ligacoes(self, obra_id: int, ligacoes: list[dict[str, Any]]) -> None:

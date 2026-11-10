@@ -28,6 +28,7 @@ from mao_de_obra import obra as etapa4
 from mao_de_obra.funcoes import ErroFuncoes
 
 from . import atualizacao
+from . import obras as gestao
 from .inicio import (HOST, NOME_APP, NOSSO, OUTRO, RAIZ, avisar, caminho_banco_padrao, configurar_log, porta_padrao,
                      preparar_saidas, verificar_porta)
 
@@ -218,7 +219,8 @@ def criar_app(
 
     @app.get("/api/importacoes")
     def listar():
-        return jsonify(banco.listar_obras())
+        # obras salvas com a etapa atual e quais etapas já podem ser abertas
+        return jsonify(gestao.listar(banco))
 
     @app.get("/api/importacoes/<int:obra_id>")
     def carregar(obra_id):
@@ -501,6 +503,41 @@ def criar_app(
         dados = etapa5.exportar_equipe_excel(banco, obra_id, cid)
         return Response(dados, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         headers={"Content-Disposition": f'attachment; filename="equipe_por_semana_obra_{obra_id}.xlsx"'})
+
+    # ------------------------------------------------------------------ gerenciar obras salvas
+
+    @app.errorhandler(gestao.ErroObras)
+    def erro_obras(exc):
+        return jsonify({"erro": str(exc)}), exc.status
+
+    @app.get("/api/obras/<int:obra_id>/etapas")
+    def etapas_obra(obra_id):
+        return jsonify(gestao.etapas(banco, obra_id))
+
+    @app.get("/api/obras/<int:obra_id>/leitura")
+    def leitura_salva(obra_id):
+        return jsonify(gestao.leitura_salva(banco, obra_id))
+
+    @app.post("/api/obras/<int:obra_id>/dados")
+    def editar_obra(obra_id):
+        return jsonify(gestao.editar_obra(banco, obra_id, request.get_json(silent=True) or {}))
+
+    def _excluir(ids):
+        with trava_calculos:
+            rodando = [i for i, c in calculos.items() if c.get("rodando")]
+            r = gestao.excluir(banco, ids, rodando)
+            for i in r["excluidas"]:
+                calculos.pop(i, None)
+        logging.getLogger("cronograma").info("Obras excluídas: %s", r["excluidas"])
+        return jsonify(r)
+
+    @app.post("/api/obras/excluir")
+    def excluir_obras():
+        return _excluir((request.get_json(silent=True) or {}).get("ids") or [])
+
+    @app.delete("/api/obras/<int:obra_id>")
+    def excluir_obra(obra_id):
+        return _excluir([obra_id])
 
     return app
 

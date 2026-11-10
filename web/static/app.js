@@ -7,7 +7,10 @@ const ROTULOS = {
 };
 const NATUREZAS = { producao: "Produção", tempo: "Tempo", transporte: "Transporte", taxa: "Taxa" };
 
+const OBRA_SALVA = new URLSearchParams(location.search).get("obra");  // /?obra=N: Leitura de uma obra salva
+
 const estado = {
+  salva: Boolean(OBRA_SALVA), // true: dados vindos do banco (sem reenviar a planilha)
   dados: null,          // resultado da leitura
   recolhidos: new Set(),// itens de grupos recolhidos
   naturezas: {},        // linha_excel -> natureza alterada pelo usuário
@@ -95,8 +98,10 @@ async function reler(opcoes) {
 function mostrar(dados, preencherObra) {
   estado.dados = dados;
   $("#conferencia").hidden = false;
-  mostrarAba(dados);
-  mostrarMapeamento(dados);
+  if (!estado.salva) {
+    mostrarAba(dados);
+    mostrarMapeamento(dados);
+  }
   if (preencherObra) preencherCamposObra(dados.obra);
   mostrarResumo();
   mostrarAlertas(dados.alertas);
@@ -333,7 +338,7 @@ function linhaServico(s, nivel) {
     <td class="num">${qtd(s.quantidade)}</td>
     <td class="num">${reais(s.preco_unit)}</td>
     <td class="num total"${titulo}>${reais(s.total)}</td>
-    <td><select class="natureza ${alterada ? "alterada" : ""}" data-linha="${s.linha_excel}" title="${alterada ? "Alterada (automática: " + NATUREZAS[s.natureza_automatica] + ")" : "Classificação automática pela unidade"}">${opcoes}</select></td>
+    <td><select class="natureza ${alterada ? "alterada" : ""}" data-linha="${s.linha_excel}" ${estado.salva ? "disabled" : ""} title="${alterada ? "Alterada (automática: " + NATUREZAS[s.natureza_automatica] + ")" : "Classificação automática pela unidade"}">${opcoes}</select></td>
   </tr>`;
 }
 
@@ -368,6 +373,7 @@ $("#btn-recolher").addEventListener("click", () => {
 /* ------------------------------------------------------------------ salvar */
 
 $("#btn-salvar").addEventListener("click", async () => {
+  if (estado.salva) return salvarObraSalva();
   const msg = $("#msg-salvar");
   const prazo = Number($("#obra-prazo").value);
   const unidade = $("#obra-prazo-unidade").value;
@@ -404,13 +410,174 @@ $("#btn-salvar").addEventListener("click", async () => {
   }
 });
 
+/* ------------------------------------------------------------------ Leitura de uma obra salva */
+
+function dadosDaObraNaTela() {
+  const bdi = $("#obra-bdi").value;
+  return {
+    nome: $("#obra-nome").value.trim() || null,
+    prazo_valor: Number($("#obra-prazo").value),
+    prazo_unidade: $("#obra-prazo-unidade").value,
+    bdi: bdi === "" ? null : Number(bdi) / 100,
+    desoneracao: $("#obra-desoneracao").value.trim() || null,
+    referencias: $("#obra-referencias").value.split("\n").map((t) => t.trim()).filter(Boolean),
+  };
+}
+
+async function salvarObraSalva() {
+  const msg = $("#msg-salvar");
+  const obra = dadosDaObraNaTela();
+  if (!(obra.prazo_valor > 0) || !obra.prazo_unidade) {
+    marcarPrazo();
+    $("#obra-prazo").focus();
+    return mensagem(msg, "Informe o prazo da obra (valor e unidade): ele é obrigatório para as próximas etapas.", "erro");
+  }
+  $("#btn-salvar").disabled = true;
+  try {
+    const dados = await api(`/api/obras/${OBRA_SALVA}/dados`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(obra),
+    });
+    mostrar(dados, true);
+    mostrarInfoSalva(dados);
+    mensagem(msg, "Alterações salvas.", "ok");
+    window.dispatchEvent(new Event("obra-mudou"));   // o nome novo aparece na barra de etapas
+  } catch (err) {
+    mensagem(msg, err.message, "erro");
+  } finally {
+    $("#btn-salvar").disabled = false;
+  }
+}
+
+function mostrarInfoSalva(d) {
+  const info = $("#info-salva");
+  info.hidden = false;
+  info.innerHTML = `Obra salva nº ${d.obra_id} · arquivo <b>${esc(d.arquivo || "—")}</b>${d.aba ? ` (aba ${esc(d.aba)})` : ""}
+    · importada em ${esc(dataBr(d.data_importacao))}. Dá para alterar nome, prazo, BDI, desoneração e referências;
+    os serviços vêm da planilha (para trocá-los, importe a planilha de novo).`;
+}
+
+async function abrirObraSalva() {
+  $("#envio").hidden = true;
+  $("#obras").hidden = true;
+  $("#cartao-aba").hidden = true;
+  $("#btn-salvar").textContent = "Salvar alterações";
+  document.title = "Leitura da obra";
+  try {
+    const dados = await api(`/api/obras/${OBRA_SALVA}/leitura`);
+    estado.recolhidos = new Set(dados.grupos.filter((g) => g.nivel === 1).map((g) => g.item));
+    mostrar(dados, true);
+    mostrarInfoSalva(dados);
+  } catch (err) {
+    $("#envio").hidden = false;
+    $("#form-envio").hidden = true;
+    mensagem($("#msg-envio"), `${err.message} `, "erro");
+    $("#msg-envio").insertAdjacentHTML("beforeend", '<a href="/">Voltar para a lista de obras</a>');
+  }
+}
+
+/* ------------------------------------------------------------------ obras salvas */
+
+function dataBr(iso) {
+  if (!iso) return "—";
+  const [d, h] = String(iso).split("T");
+  const [a, m, dia] = d.split("-");
+  return dia ? `${dia}/${m}/${a}${h ? " " + h.slice(0, 5) : ""}` : iso;
+}
+
+const CLASSE_ETAPA = { leitura: "e1", ligacao: "e2", sequencia: "e3", mao_de_obra: "e4", cronograma: "e5", escolhido: "e6" };
+let obrasSalvas = [];
+
+function botoesEtapas(o) {
+  return o.etapas.map((e) => e.ativa
+    ? `<a class="etapa-botao" href="${e.url}?obra=${o.id}">${esc(e.rotulo)}</a>`
+    : `<span class="etapa-botao desativada" title="${esc(e.motivo)}" aria-disabled="true">${esc(e.rotulo)}</span>`).join("");
+}
+
 async function carregarSalvas() {
   try {
-    const lista = await api("/api/importacoes");
-    $("#salvas").hidden = lista.length === 0;
-    $("#salvas tbody").innerHTML = lista
-      .map((o) => `<tr><td>${o.id}</td><td>${esc((o.nome || "").slice(0, 80))}</td><td>${esc(o.arquivo)}</td><td>${o.qtd_servicos}</td><td>${reais(o.soma_servicos)}</td><td>${esc((o.data_importacao || "").replace("T", " "))}</td><td><a href="/ligacao?obra=${o.id}">Ligação</a>${o.tem_rede ? ` · <a href="/sequencia?obra=${o.id}">Sequência</a> · <a href="/mao-de-obra?obra=${o.id}">Mão de obra</a>` : ""}</td></tr>`)
-      .join("");
-  } catch (_) { /* sem lista */ }
+    obrasSalvas = await api("/api/importacoes");
+  } catch (err) {
+    mensagem($("#msg-obras"), "Não foi possível carregar as obras salvas: " + err.message, "erro");
+    return;
+  }
+  $("#sem-obras").hidden = obrasSalvas.length > 0;
+  $("#tabela-obras").hidden = obrasSalvas.length === 0;
+  $("#tabela-obras tbody").innerHTML = obrasSalvas.map((o) => `<tr data-id="${o.id}">
+      <td><input type="checkbox" class="marcar-obra" value="${o.id}" aria-label="Selecionar a obra ${o.id}"></td>
+      <td class="num">${o.id}</td>
+      <td class="nome-obra" title="${esc(o.nome || "")}"><span class="nome">${esc((o.nome || "(sem nome)").replace(/\s+/g, " "))}</span>
+        <span class="arquivo-obra">${esc(o.arquivo || "")}</span></td>
+      <td class="data-obra">${esc(dataBr(o.data_importacao))}</td>
+      <td class="num">${reais(o.soma_servicos)}</td>
+      <td><span class="selo-etapa ${CLASSE_ETAPA[o.atual] || ""}">${esc(o.atual_rotulo)}</span></td>
+      <td class="botoes-etapas">${botoesEtapas(o)}</td>
+      <td><button type="button" class="secundario pequeno excluir-obra" data-id="${o.id}">Excluir</button></td>
+    </tr>`).join("");
+  $("#marcar-todas").checked = false;
+  atualizarSelecao();
 }
-carregarSalvas();
+
+function selecionadas() {
+  return [...document.querySelectorAll(".marcar-obra:checked")].map((c) => Number(c.value));
+}
+function atualizarSelecao() {
+  const n = selecionadas().length;
+  const b = $("#btn-excluir-selecionadas");
+  b.disabled = n === 0;
+  b.textContent = n ? `Excluir selecionadas (${n})` : "Excluir selecionadas";
+  $("#marcar-todas").checked = n > 0 && n === obrasSalvas.length;
+  $("#marcar-todas").indeterminate = n > 0 && n < obrasSalvas.length;
+}
+
+function pedirConfirmacao(ids) {
+  const escolhidas = obrasSalvas.filter((o) => ids.includes(o.id));
+  const caixa = $("#confirmar-exclusao");
+  const n = escolhidas.length;
+  caixa.innerHTML = `<h3 id="titulo-exclusao">Excluir ${n === 1 ? "1 obra" : `${n} obras`}?</h3>
+    <ul>${escolhidas.map((o) => `<li><b>nº ${o.id}</b> · ${esc((o.nome || "(sem nome)").replace(/\s+/g, " ").slice(0, 100))}
+      <span class="discreto">(${esc(o.arquivo || "")}, etapa: ${esc(o.atual_rotulo)})</span></li>`).join("")}</ul>
+    <p>Apaga ${n === 1 ? "a obra" : "as obras"} e tudo ${n === 1 ? "dela" : "delas"}: serviços, ligações, sequência, mão de obra,
+      cronograma, cenários e a cópia da planilha. <b>Não dá para desfazer.</b><br>
+      <span class="discreto">A memória das ligações e o banco de coeficientes ficam guardados (servem para as próximas obras).</span></p>
+    <p id="msg-exclusao" class="mensagem"></p>
+    <div class="acoes-linha"><span class="espaco"></span>
+      <button type="button" class="secundario" id="cancelar-exclusao">Cancelar</button>
+      <button type="button" class="perigo" id="confirmar-excluir">Excluir ${n === 1 ? "a obra" : `as ${n} obras`}</button></div>`;
+  caixa.hidden = false;
+  caixa.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  $("#cancelar-exclusao").focus();
+  $("#cancelar-exclusao").onclick = () => { caixa.hidden = true; };
+  $("#confirmar-excluir").onclick = async () => {
+    $("#confirmar-excluir").disabled = true;
+    try {
+      const r = await api("/api/obras/excluir", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids }),
+      });
+      caixa.hidden = true;
+      mensagem($("#msg-obras"), r.excluidas.length === 1 ? `Obra nº ${r.excluidas[0]} excluída.`
+        : `${r.excluidas.length} obras excluídas (nº ${r.excluidas.join(", ")}).`, "ok");
+      carregarSalvas();
+    } catch (err) {
+      mensagem($("#msg-exclusao"), err.message, "erro");
+      $("#confirmar-excluir").disabled = false;
+    }
+  };
+}
+
+$("#tabela-obras").addEventListener("change", (e) => {
+  if (e.target.id === "marcar-todas") {
+    document.querySelectorAll(".marcar-obra").forEach((c) => { c.checked = e.target.checked; });
+  }
+  atualizarSelecao();
+});
+$("#tabela-obras").addEventListener("click", (e) => {
+  const b = e.target.closest(".excluir-obra");
+  if (b) pedirConfirmacao([Number(b.dataset.id)]);
+});
+$("#btn-excluir-selecionadas").addEventListener("click", () => pedirConfirmacao(selecionadas()));
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("#confirmar-exclusao").hidden) $("#confirmar-exclusao").hidden = true;
+});
+
+if (estado.salva) abrirObraSalva();
+else carregarSalvas();

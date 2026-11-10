@@ -25,15 +25,33 @@
       <button type="submit" class="primario" id="btn-ler">Ler planilha</button>
     </form>
     <p id="msg-envio" class="mensagem"></p>
-    <details id="salvas" hidden>
-      <summary>Importações salvas</summary>
-      <table class="simples"><thead><tr><th>Nº</th><th>Obra</th><th>Arquivo</th><th>Serviços</th><th>Total</th><th>Data</th><th>Próximas etapas</th></tr></thead><tbody></tbody></table>
-    </details>
+  </section>
+
+  <!-- Obras salvas -->
+  <section id="obras" class="cartao">
+    <div class="acoes-linha">
+      <h2>Obras salvas</h2>
+      <span class="espaco"></span>
+      <button type="button" class="perigo" id="btn-excluir-selecionadas" disabled>Excluir selecionadas</button>
+    </div>
+    <p id="msg-obras" class="mensagem"></p>
+    <div id="confirmar-exclusao" class="confirmar-exclusao" hidden role="alertdialog" aria-labelledby="titulo-exclusao"></div>
+    <p id="sem-obras" class="discreto" hidden>Nenhuma obra salva ainda. Envie a planilha da licitação acima.</p>
+    <div class="rolagem">
+      <table class="simples lista-obras" id="tabela-obras" hidden>
+        <thead><tr>
+          <th><input type="checkbox" id="marcar-todas" title="Marcar todas"></th>
+          <th class="num">Nº</th><th>Obra / arquivo</th><th>Data</th><th class="num">Total</th>
+          <th>Etapa atual</th><th>Abrir</th><th></th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
   </section>
 
   <section id="conferencia" hidden>
     <!-- Aba e colunas -->
-    <div class="cartao">
+    <div class="cartao" id="cartao-aba">
       <div class="linha-aba">
         <label>Aba
           <select id="aba"></select>
@@ -52,6 +70,7 @@
 
     <!-- Resumo -->
     <div class="cartao" id="resumo">
+      <p id="info-salva" class="discreto" hidden></p>
       <div id="faixa" class="faixa"></div>
       <div class="grade-obra">
         <label class="largo">Obra
@@ -129,5 +148,6 @@
 </main>
 <script src="/static/app.js"></script>
 <script src="/static/topo.js"></script>
+<script src="/static/etapas.js"></script>
 </body>
 </html>

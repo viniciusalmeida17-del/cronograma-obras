@@ -36,7 +36,15 @@ async function api(url, opcoes = {}) {
   const resp = await fetch(url, opcoes);
   const corpo = await resp.json().catch(() => ({ erro: "Resposta inválida do servidor." }));
   if (!resp.ok) throw new ErroApi(corpo, resp.status);
+  if ((opcoes.method || "GET").toUpperCase() !== "GET") avisarMudanca();
   return corpo;
+}
+
+/** Algo foi gravado: a barra de etapas (etapas.js) confere de novo até onde a obra chegou. */
+let _tempoMudanca;
+function avisarMudanca() {
+  clearTimeout(_tempoMudanca);
+  _tempoMudanca = setTimeout(() => window.dispatchEvent(new Event("obra-mudou")), 300);
 }
 
 /** Mostra os erros de validação da biblioteca (com aba e linha do Excel). */

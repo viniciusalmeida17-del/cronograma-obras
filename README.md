@@ -131,6 +131,23 @@ a pasta `arquivos_obras/` fica ao lado do banco),
 4. Navegar na árvore de grupos, filtrar por grupo/natureza, buscar texto, corrigir a natureza de um serviço.
 5. "Confirmar e salvar importação" grava no SQLite.
 
+## Obras salvas
+
+- **Lista na tela inicial** (sempre aberta): nº, nome, arquivo, data, total e **Etapa atual**: Leitura, Ligação,
+  Sequência, Mão de obra, Cronograma calculado ou Cenário escolhido (a mais avançada a que a obra chegou).
+- **Abrir qualquer etapa** pelos botões de cada obra. As que ainda não podem ser abertas ficam desativadas, com o motivo
+  ao passar o mouse: Sequência e Mão de obra pedem a sequência montada; Cronograma pede a mão de obra calculada.
+- **Barra de etapas** (Leitura › Ligação › Sequência › Mão de obra › Cronograma) abaixo do topo de todas as telas da obra,
+  com o nome da obra, a tela atual destacada e a mesma regra de desativar (`web/static/etapas.js`).
+- **Leitura de uma obra salva** (`/?obra=N`): mostra os dados lidos sem enviar a planilha de novo e deixa alterar nome,
+  prazo, BDI, desoneração e referências (`POST /api/obras/N/dados`). Os serviços não mudam: para trocá-los, importe de novo.
+- **Excluir**: botão em cada obra ou caixas de seleção + "Excluir selecionadas", com confirmação na própria página
+  listando as obras. Apaga a obra e tudo dela (serviços, ligações, rede, mão de obra, cronograma, cenários) e a cópia da
+  planilha em `arquivos_obras/`; **a memória das ligações e o banco de coeficientes ficam**, então uma nova importação da
+  mesma planilha já vem com as ligações confirmadas pela memória. Obra com o cálculo do cronograma rodando não pode ser
+  excluída. API: `POST /api/obras/excluir` com `{"ids": [...]}` ou `DELETE /api/obras/N`.
+- Regras em `web/obras.py` (etapa atual, etapas disponíveis, leitura salva, edição e exclusão).
+
 ## Etapa 3 — ligação e rede
 
 1. Depois de salvar a importação, o link "Seguir para a ligação" abre a tela de ligação.
