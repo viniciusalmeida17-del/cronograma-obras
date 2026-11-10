@@ -4,3 +4,4 @@ __pycache__/
 dados/backup/
 arquivos_obras/
 .venv/
+logs/

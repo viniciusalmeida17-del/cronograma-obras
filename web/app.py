@@ -1,10 +1,13 @@
-"""Interface web local (Flask) da Etapa 2 — leitura e conferência da planilha.
+"""Interface web local (Flask).
 
 Executar:  python -m web.app   (abre em http://127.0.0.1:5000)
+No Windows também pelo atalho "Cronograma de Obras" (windows/criar_atalhos.ps1), sem janela preta.
 """
 from __future__ import annotations
 
+import logging
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -14,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from flask import Flask, Response, jsonify, request, send_from_directory
+from werkzeug.serving import make_server
 
 from armazenamento import Banco
 from atividades import ErroBiblioteca, carregar_biblioteca
@@ -23,17 +27,23 @@ from leitor_planilha import NATUREZAS, ErroLeitura, ler_planilha
 from mao_de_obra import obra as etapa4
 from mao_de_obra.funcoes import ErroFuncoes
 
+from .inicio import (HOST, NOME_APP, NOSSO, OUTRO, RAIZ, avisar, caminho_banco_padrao, configurar_log, porta_padrao,
+                     preparar_saidas, verificar_porta)
+
 PASTA_ESTATICA = Path(__file__).parent / "static"
 CAMPOS_OBRA_EDITAVEIS = ("nome", "prazo_valor", "prazo_unidade", "bdi", "desoneracao", "referencias")
 UNIDADES_PRAZO = ("dias", "semanas", "meses", "anos")
 
 
 def criar_app(
-    caminho_banco: str | None = None, pasta_uploads: str | None = None, caminho_biblioteca: str | None = None
+    caminho_banco: str | None = None, pasta_uploads: str | None = None, caminho_biblioteca: str | None = None,
+    ao_fechar: Any = None,
 ) -> Flask:
     app = Flask(__name__, static_folder=None)
     app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
-    banco = Banco(caminho_banco or os.environ.get("CRONOGRAMA_BANCO", "cronograma.sqlite3"))
+    app.config["CAMINHO_BANCO"] = caminho_banco or caminho_banco_padrao()
+    app.config["AO_FECHAR"] = ao_fechar  # main() põe aqui o desligamento do servidor
+    banco = Banco(app.config["CAMINHO_BANCO"])
     uploads = Path(pasta_uploads or tempfile.mkdtemp(prefix="cronograma_uploads_"))
     uploads.mkdir(parents=True, exist_ok=True)
     leituras: dict[str, dict[str, Any]] = {}  # token -> arquivo e opções da última leitura
@@ -46,6 +56,23 @@ def criar_app(
 
     def _erro(msg: str, status: int = 400):
         return jsonify({"erro": msg}), status
+
+    @app.get("/api/sobre")
+    def sobre():
+        # usado para saber se o app já está aberto nesta porta (clicar no atalho de novo só abre o navegador)
+        return jsonify({"app": NOME_APP, "pasta": str(RAIZ), "pid": os.getpid()})
+
+    @app.post("/api/fechar")
+    def fechar():
+        # cabeçalho próprio: outro site aberto no navegador não consegue mandar (o navegador exige permissão antes)
+        if request.headers.get("X-Fechar") != "1":
+            return _erro("Pedido inválido.", 403)
+        desligar = app.config.get("AO_FECHAR")
+        if desligar is None:
+            return _erro("Este servidor não foi aberto pelo app (python -m web.app ou atalho); feche-o por onde foi aberto.", 409)
+        logging.getLogger("cronograma").info("Fechado pelo botão da tela")
+        threading.Timer(0.3, desligar).start()  # responde antes de desligar
+        return jsonify({"ok": True})
 
     @app.get("/")
     def index():
@@ -393,6 +420,7 @@ def criar_app(
                 try:
                     etapa5.calcular_cenarios(banco, obra_id, prazos, biblioteca, progresso=progresso, parar=parar)
                 except Exception as exc:  # noqa: BLE001 - mostrado na tela
+                    logging.getLogger("cronograma").exception("Erro no cálculo dos cenários da obra %s", obra_id)
                     estado["erro"] = str(exc)
                 finally:
                     estado.update(rodando=False, progresso=1.0)
@@ -449,13 +477,52 @@ def criar_app(
     return app
 
 
-def main() -> None:
-    porta = int(os.environ.get("PORTA", "5000"))
-    app = criar_app()
-    if os.environ.get("ABRIR_NAVEGADOR", "1") == "1":
-        threading.Timer(1.0, lambda: webbrowser.open(f"http://127.0.0.1:{porta}")).start()
-    app.run(host="127.0.0.1", port=porta, debug=False)
+def main(argv: list[str] | None = None) -> int:
+    """Abre o servidor e o navegador. Se o app já estiver aberto nesta porta, só abre o navegador.
+
+    --atalho: aberto pelo atalho do Windows (pythonw): problemas aparecem numa janela em vez do terminal.
+    """
+    argv = sys.argv[1:] if argv is None else argv
+    janela = "--atalho" in argv
+    preparar_saidas()
+    configurar_log()
+    log = logging.getLogger("cronograma")
+    porta = porta_padrao()
+    url = f"http://{HOST}:{porta}"
+    abrir_navegador = os.environ.get("ABRIR_NAVEGADOR", "1") == "1"
+
+    situacao = verificar_porta(porta)
+    if situacao == NOSSO:
+        log.info("O app já está aberto em %s: só abre o navegador", url)
+        print(f"O Cronograma de obras já está aberto em {url}.")
+        if abrir_navegador:
+            webbrowser.open(url)
+        return 0
+    if situacao == OUTRO:
+        avisar(f"A porta {porta} está sendo usada por outro programa, então o app não pode abrir.\n\n"
+               "Feche o outro programa (ou reinicie o computador) e tente de novo.", janela)
+        return 1
+
+    try:
+        servidor = make_server(HOST, porta, criar_app(), threaded=True)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Falha ao iniciar")
+        avisar(f"O app não conseguiu iniciar:\n\n{exc}\n\nDetalhes em logs\\app.log.", janela)
+        return 1
+    servidor.app.config["AO_FECHAR"] = lambda: threading.Thread(target=servidor.shutdown, daemon=True).start()
+    log.info("App aberto em %s (banco %s)", url, servidor.app.config["CAMINHO_BANCO"])
+    if abrir_navegador:
+        threading.Timer(1.0, webbrowser.open, [url]).start()
+    print(f"Cronograma de obras em {url}  (feche pelo botão \"Fechar o app\" ou com Ctrl+C)")
+    try:
+        servidor.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        servidor.server_close()
+        log.info("App fechado")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -1,0 +1,4 @@
+# scripts do Windows: o WSH lê .vbs em UTF-16 e o PowerShell 5 precisa do BOM nos .ps1
+*.vbs binary
+*.ps1 text eol=crlf
+*.ico binary

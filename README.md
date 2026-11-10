@@ -26,7 +26,27 @@ python -m pip install -r requirements.txt
 
 (Se o `py install` não existir no seu computador, instale o Python 3.14 pelo site python.org e use os mesmos comandos a partir do `py -3.14 -m venv .venv`.)
 
-### No dia a dia (Windows)
+### Atalhos do Windows (uma vez só, depois de criar o `.venv`)
+
+Na pasta do projeto, rode:
+
+```bat
+powershell -ExecutionPolicy Bypass -File windows\criar_atalhos.ps1
+```
+
+Ele cria dois atalhos, na área de trabalho (a de verdade, mesmo se ela estiver no OneDrive) e no menu Iniciar:
+
+- **Cronograma de Obras**: abre o app com dois cliques, sem janela preta (`windows\abrir.vbs` roda o
+  `.venv\Scripts\pythonw.exe -m web.atalho`). Se o app já estiver aberto, só abre o navegador de novo.
+- **Atualizar Cronograma de Obras**: fecha o app se estiver aberto, faz `git pull`, instala o `requirements.txt` no
+  `.venv` e mostra numa janela se deu certo (com as novidades) ou qual foi o erro.
+
+Para fechar o app, use o botão **Fechar o app** no topo de qualquer página. Se o app não conseguir abrir (falta o
+`.venv`, faltam pacotes, a porta 5000 está ocupada por outro programa), aparece uma janela com o motivo. Erros ficam em
+`logs\app.log` e o registro das atualizações em `logs\atualizacao.log` (a pasta `logs/` não vai para o git).
+Se mudar a pasta do projeto de lugar, rode o `criar_atalhos.ps1` de novo.
+
+### Pelo terminal (Windows)
 
 ```bat
 .venv\Scripts\activate
@@ -34,7 +54,8 @@ python -m web.app
 python -m pytest
 ```
 
-O `web.app` abre http://127.0.0.1:5000 no navegador; o `pytest` roda os testes (uns 2 minutos).
+O `web.app` abre http://127.0.0.1:5000 no navegador (feche pelo botão "Fechar o app" ou com Ctrl+C); o `pytest` roda
+os testes (uns 2 minutos).
 
 ### Linux / macOS
 
@@ -45,7 +66,11 @@ python -m web.app
 python -m pytest
 ```
 
-Variáveis opcionais: `PORTA` (padrão 5000), `CRONOGRAMA_BANCO` (padrão `cronograma.sqlite3`),
+O banco `cronograma.sqlite3` e a pasta `arquivos_obras/` ficam sempre na pasta do projeto, de onde quer que o app
+seja aberto.
+
+Variáveis opcionais: `PORTA` (padrão 5000), `CRONOGRAMA_BANCO` (padrão `cronograma.sqlite3` na pasta do projeto;
+a pasta `arquivos_obras/` fica ao lado do banco),
 `CRONOGRAMA_BIBLIOTECA` (padrão `dados/biblioteca_atividades.xlsx`), `ABRIR_NAVEGADOR=0` para não abrir o navegador sozinho.
 
 ## Estrutura
@@ -79,7 +104,8 @@ Variáveis opcionais: `PORTA` (padrão 5000), `CRONOGRAMA_BANCO` (padrão `crono
 | `  sinapi.py` | (em `mao_de_obra/`) Importa a tabela analítica do SINAPI para o banco de coeficientes. |
 | `dados/` | `biblioteca_atividades.xlsx` (biblioteca padrão), `funcoes.xlsx` (funções e aba Juntar funções), `produtividade_referencia.xlsx` (coeficientes SINAPI pesquisados) e `palavras_subcomposicao.txt` (palavras que indicam serviço), todos editáveis. |
 | `armazenamento/` | SQLite: `obras`, `grupos`, `servicos` (com `atividade_biblioteca`, `status_ligacao`, `regra_usada`), `memoria_ligacoes`, `obra_atividades`, `obra_dependencias` as tabelas da etapa 4 (`armazenamento/banco_etapa4.py`) e as da etapa 5 (`armazenamento/banco_etapa5.py`: `obra_calendario`, `cenarios`, `cenario_atividades`, `cenario_equipe_semana`, `custos_hora_padrao`). Bancos antigos são migrados sozinhos. Uma cópia do .xlsx de cada obra fica em `arquivos_obras/`, ao lado do banco. |
-| `web/` | Servidor Flask local + tela de conferência (HTML/JS puro, sem build). |
+| `web/` | Servidor Flask local + telas (HTML/JS puro, sem build). `inicio.py`: caminhos, log, aviso em janela e "o app já está aberto?" (só biblioteca padrão); `atalho.py`: entrada do atalho do Windows. |
+| `windows/` | `criar_atalhos.ps1` (cria os atalhos), `abrir.vbs`, `atualizar.vbs` + `atualizar.ps1`, ícones (`gerar_icones.py` refaz os .ico). |
 | `tests/` | Testes com o arquivo da Concorrência 2/2024 e o CSV esperado em `tests/dados/`. |
 
 ## Regras principais

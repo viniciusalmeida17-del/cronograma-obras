@@ -372,3 +372,13 @@ table.comparacao .botoes-cenario { margin-top: 4px; white-space: nowrap; }
 .legenda i.seta-ti { border-color: #52514e; }
 .legenda i.seta-ii { border-color: #6250d6; border-top-style: dashed; }
 .linha-indireto input[name=ind_desc] { width: 100%; min-width: 260px; }
+
+/* botão "Fechar o app" no topo */
+.botao-fechar-app {
+  margin-left: auto; align-self: center; padding: 5px 12px; font-size: 13px; cursor: pointer;
+  background: transparent; color: #fff; border: 1px solid rgba(255, 255, 255, .6); border-radius: 6px;
+}
+.botao-fechar-app:hover { background: rgba(255, 255, 255, .15); }
+.botao-fechar-app:disabled { opacity: .5; cursor: default; }
+.topo .link-topo[href="/sinapi"] + .botao-fechar-app { margin-left: 16px; }
+.cartao.fechado { max-width: 640px; margin: 40px auto; }
