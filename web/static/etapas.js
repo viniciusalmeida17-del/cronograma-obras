@@ -34,7 +34,7 @@
       return `<li><a class="${classe}" href="${e.url}?obra=${encodeURIComponent(obra)}"${atual}>${escapar(e.rotulo)}</a></li>`;
     }).join('<li class="separador" aria-hidden="true">›</li>');
     barra.innerHTML = `<a href="/" class="obra-nome" title="${escapar(nome)} — voltar para a lista de obras">
-        <span class="discreto">Obra nº ${d.obra.id}</span> ${escapar(nome.length > 70 ? nome.slice(0, 68) + "…" : nome)}</a>
+        <span class="discreto">Obra nº ${d.obra.numero}</span> ${escapar(nome.length > 70 ? nome.slice(0, 68) + "…" : nome)}</a>
       <ol>${itens}</ol>
       <span class="etapa-atual-info discreto">Etapa atual: <b>${escapar(d.atual_rotulo)}</b></span>`;
   }

@@ -19,7 +19,7 @@ async function carregar() {
 
 function desenhar() {
   const r = dados.resumo;
-  $("#nome-obra").textContent = `Obra nº ${obraId} · ${dados.obra.nome || dados.obra.arquivo}`;
+  $("#nome-obra").textContent = `Obra nº ${dados.obra.numero} · ${dados.obra.nome || dados.obra.arquivo}`;
   $("#link-ligacao").href = `/ligacao?obra=${obraId}`;
   $("#link-mao-de-obra").href = `/mao-de-obra?obra=${obraId}`;
   const caixas = [

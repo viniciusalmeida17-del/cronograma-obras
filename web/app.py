@@ -215,7 +215,8 @@ def criar_app(
 
         obra_id = banco.salvar_importacao(resultado)
         banco.guardar_arquivo(obra_id, leituras[token]["caminho"])  # etapa 4 lê as composições dele
-        return jsonify({"id": obra_id, "mensagem": f"Importação salva (obra nº {obra_id})."})
+        return jsonify({"id": obra_id, "numero": banco.numero_obra(obra_id),
+                        "mensagem": f"Importação salva (obra nº {banco.numero_obra(obra_id)})."})
 
     @app.get("/api/importacoes")
     def listar():
@@ -502,7 +503,8 @@ def criar_app(
         cid = None if cenario == "escolhido" else int(cenario)
         dados = etapa5.exportar_equipe_excel(banco, obra_id, cid)
         return Response(dados, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        headers={"Content-Disposition": f'attachment; filename="equipe_por_semana_obra_{obra_id}.xlsx"'})
+                        headers={"Content-Disposition":
+                                 f'attachment; filename="equipe_por_semana_obra_{banco.numero_obra(obra_id)}.xlsx"'})
 
     # ------------------------------------------------------------------ gerenciar obras salvas
 

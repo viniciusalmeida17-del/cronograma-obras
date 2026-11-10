@@ -204,10 +204,20 @@ class Banco(MaoDeObraMixin, CronogramaMixin):
             )
         return obra_id
 
+    @staticmethod
+    def _numero_obra(con: sqlite3.Connection, obra_id: int) -> int:
+        """Número que o usuário vê: a ordem de importação entre as obras que existem (a mais antiga é a 1).
+        Muda quando uma obra mais antiga é excluída; o id interno (links e API) não muda."""
+        return con.execute("SELECT COUNT(*) FROM obras WHERE id <= ?", (obra_id,)).fetchone()[0]
+
+    def numero_obra(self, obra_id: int) -> int:
+        with closing(self._conectar()) as con:
+            return self._numero_obra(con, obra_id)
+
     def listar_obras(self) -> list[dict[str, Any]]:
         with closing(self._conectar()) as con:
             linhas = con.execute(
-                """SELECT o.id, o.nome, o.arquivo, o.data_importacao, o.prazo_valor, o.prazo_unidade,
+                """SELECT o.id, ROW_NUMBER() OVER (ORDER BY o.id) AS numero, o.nome, o.arquivo, o.data_importacao, o.prazo_valor, o.prazo_unidade,
                           o.soma_servicos, (SELECT COUNT(*) FROM servicos s WHERE s.obra_id = o.id) AS qtd_servicos,
                           EXISTS (SELECT 1 FROM obra_atividades a WHERE a.obra_id = o.id) AS tem_rede
                    FROM obras o ORDER BY o.id DESC"""
@@ -220,6 +230,7 @@ class Banco(MaoDeObraMixin, CronogramaMixin):
             if obra is None:
                 return None
             obra = dict(obra)
+            obra["numero"] = self._numero_obra(con, obra_id)
             obra["referencias"] = json.loads(obra["referencias"] or "[]")
             obra["colunas"] = json.loads(obra["colunas"] or "{}")
             grupos = [dict(g) for g in con.execute("SELECT * FROM grupos WHERE obra_id = ? ORDER BY linha_excel", (obra_id,))]

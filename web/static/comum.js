@@ -1,5 +1,5 @@
 "use strict";
-/* Funções compartilhadas pelas telas das etapas 3 em diante. */
+/* Funções compartilhadas pelas telas da obra (ligação em diante). */
 
 const $ = (sel, raiz = document) => raiz.querySelector(sel);
 const $$ = (sel, raiz = document) => [...raiz.querySelectorAll(sel)];

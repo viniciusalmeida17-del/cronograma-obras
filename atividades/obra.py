@@ -33,7 +33,7 @@ class ErroObra(Exception):
 def _obra(banco: Banco, obra_id: int) -> dict[str, Any]:
     dados = banco.carregar_obra(obra_id)
     if dados is None:
-        raise ErroObra(f"Obra {obra_id} não encontrada.")
+        raise ErroObra("Obra não encontrada.")
     return dados
 
 

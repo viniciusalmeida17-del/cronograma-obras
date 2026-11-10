@@ -248,7 +248,7 @@ def tarefas_da_obra(
         execucao = a.get("execucao") or PROPRIA
         modos = modos_da_atividade(a, travadas.get(cod), jornadas, maq_max)
         if not modos:
-            raise ValueError(f"{cod}: atividade sem duração (resolva as pendências da etapa 4).")
+            raise ValueError(f"{cod}: atividade sem duração (resolva as pendências da mão de obra).")
         tarefas[cod] = Tarefa(
             codigo=cod, modos=modos, tipo=a["tipo"], execucao=execucao, nome=a.get("nome"), etapa=a.get("etapa"),
             ordem=a.get("ordem_biblioteca", 0), travada=travadas.get(cod), funcao_principal=a.get("funcao_principal"),

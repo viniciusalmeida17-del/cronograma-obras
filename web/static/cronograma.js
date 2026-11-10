@@ -63,11 +63,11 @@ async function carregar() {
 
 function desenharTopo() {
   const p = est.p;
-  $("#nome-obra").textContent = `Obra nº ${obraId} · ${p.obra.nome || ""}`;
+  $("#nome-obra").textContent = `Obra nº ${p.obra.numero} · ${p.obra.nome || ""}`;
   $("#link-mao-de-obra").href = `/mao-de-obra?obra=${obraId}`;
   const faltaCusto = Object.entries(p.custos).filter(([, v]) => !v.custo_hora).map(([f]) => f);
   const problemas = [];
-  if (p.pendencias_etapa4.length) problemas.push(`${p.pendencias_etapa4.length} pendência(s) da etapa 4`);
+  if (p.pendencias_etapa4.length) problemas.push(`${p.pendencias_etapa4.length} pendência(s) da mão de obra`);
   if (!p.data_inicio) problemas.push("falta a data de início");
   if (faltaCusto.length) problemas.push("falta o salário de " + faltaCusto.join(", "));
   $("#faixa").className = "faixa " + (problemas.length ? "aviso" : "ok");
@@ -619,7 +619,7 @@ function desenharEquipe() {
       ${f.contratados.map((v, i) => `<td class="num ${v && f.horas_ocupadas[i] < 0.5 * (f.horas_pagas[i] - (f.horas_feriado[i] || 0)) ? "ocioso" : ""}">${v || ""}</td>`).join("")}</tr>`).join("");
   const total = `<tr class="total"><td>Total próprios</td><td></td><td>${Math.max(...c.total_semana)}</td><td></td>${c.total_semana.map((v) => `<td class="num">${v || ""}</td>`).join("")}</tr>`;
   const ind = (c.equipe_indireta || []).length
-    ? `<tr class="separador"><td colspan="${4 + n}">Equipe indireta (etapa 4), à parte dos próprios de produção</td></tr>`
+    ? `<tr class="separador"><td colspan="${4 + n}">Equipe indireta (da mão de obra), à parte dos próprios de produção</td></tr>`
       + c.equipe_indireta.map((e) => `<tr class="indireta"><td>${esc(e.funcao)}</td><td></td><td></td><td></td>${c.semanas.map((_, i) => `<td class="num">${e.pessoas[i] ? fmt2.format(e.pessoas[i]) : ""}</td>`).join("")}</tr>`).join("")
     : "";
   $("#tabela-equipe").innerHTML = cab + `<tbody>${corpo}${total}${ind}</tbody>`;

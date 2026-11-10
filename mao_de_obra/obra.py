@@ -24,7 +24,7 @@ CAMPOS_NOVOS = ("execucao_padrao", "equipe_padrao", "equipe_max", "duracao_fixa_
 def _obra(banco: Banco, obra_id: int) -> dict[str, Any]:
     dados = banco.carregar_obra(obra_id)
     if dados is None:
-        raise ErroMaoDeObra(f"Obra {obra_id} não encontrada.")
+        raise ErroMaoDeObra("Obra não encontrada.")
     return dados
 
 
@@ -32,7 +32,7 @@ def atividades_da_obra(banco: Banco, obra_id: int, biblioteca: Biblioteca | None
     """Cópia das atividades da obra (etapa 3). Campos da etapa 4 vazios (obra antiga) vêm da biblioteca."""
     rede = banco.carregar_rede(obra_id)
     if rede is None:
-        raise ErroMaoDeObra("A rede de atividades desta obra ainda não foi montada (etapa 3).")
+        raise ErroMaoDeObra("A sequência desta obra ainda não foi montada (termine a ligação e monte a sequência).")
     atividades = rede["atividades"]
     for cod, a in atividades.items():
         lib = biblioteca.atividades.get(cod) if biblioteca else None
@@ -152,7 +152,8 @@ def estado_mao_de_obra(banco: Banco, obra_id: int, biblioteca: Biblioteca | None
             "estimativa": a.get("estimativa"),
         })
     resultado["servicos"] = servicos
-    resultado["obra"] = {k: obra.get(k) for k in ("id", "nome", "arquivo", "prazo_valor", "prazo_unidade", "composicoes_abas")}
+    resultado["obra"] = {k: obra.get(k) for k in ("id", "numero", "nome", "arquivo", "prazo_valor", "prazo_unidade",
+                                                   "composicoes_abas")}
     resultado["abas_composicoes"] = _json(obra.get("composicoes_abas"))
     resultado["funcoes_conhecidas"] = sorted({h["funcao"] for a in analises.values() for h in a["horas"]}
                                              | {f for a in resultado["atividades"] for f in a["horas_brutas"]})

@@ -451,7 +451,7 @@ async function salvarObraSalva() {
 function mostrarInfoSalva(d) {
   const info = $("#info-salva");
   info.hidden = false;
-  info.innerHTML = `Obra salva nº ${d.obra_id} · arquivo <b>${esc(d.arquivo || "—")}</b>${d.aba ? ` (aba ${esc(d.aba)})` : ""}
+  info.innerHTML = `Obra salva nº ${d.numero} · arquivo <b>${esc(d.arquivo || "—")}</b>${d.aba ? ` (aba ${esc(d.aba)})` : ""}
     · importada em ${esc(dataBr(d.data_importacao))}. Dá para alterar nome, prazo, BDI, desoneração e referências;
     os serviços vêm da planilha (para trocá-los, importe a planilha de novo).`;
 }
@@ -503,8 +503,8 @@ async function carregarSalvas() {
   $("#sem-obras").hidden = obrasSalvas.length > 0;
   $("#tabela-obras").hidden = obrasSalvas.length === 0;
   $("#tabela-obras tbody").innerHTML = obrasSalvas.map((o) => `<tr data-id="${o.id}">
-      <td><input type="checkbox" class="marcar-obra" value="${o.id}" aria-label="Selecionar a obra ${o.id}"></td>
-      <td class="num">${o.id}</td>
+      <td><input type="checkbox" class="marcar-obra" value="${o.id}" aria-label="Selecionar a obra ${o.numero}"></td>
+      <td class="num">${o.numero}</td>
       <td class="nome-obra" title="${esc(o.nome || "")}"><span class="nome">${esc((o.nome || "(sem nome)").replace(/\s+/g, " "))}</span>
         <span class="arquivo-obra">${esc(o.arquivo || "")}</span></td>
       <td class="data-obra">${esc(dataBr(o.data_importacao))}</td>
@@ -534,7 +534,7 @@ function pedirConfirmacao(ids) {
   const caixa = $("#confirmar-exclusao");
   const n = escolhidas.length;
   caixa.innerHTML = `<h3 id="titulo-exclusao">Excluir ${n === 1 ? "1 obra" : `${n} obras`}?</h3>
-    <ul>${escolhidas.map((o) => `<li><b>nº ${o.id}</b> · ${esc((o.nome || "(sem nome)").replace(/\s+/g, " ").slice(0, 100))}
+    <ul>${escolhidas.map((o) => `<li><b>nº ${o.numero}</b> · ${esc((o.nome || "(sem nome)").replace(/\s+/g, " ").slice(0, 100))}
       <span class="discreto">(${esc(o.arquivo || "")}, etapa: ${esc(o.atual_rotulo)})</span></li>`).join("")}</ul>
     <p>Apaga ${n === 1 ? "a obra" : "as obras"} e tudo ${n === 1 ? "dela" : "delas"}: serviços, ligações, sequência, mão de obra,
       cronograma, cenários e a cópia da planilha. <b>Não dá para desfazer.</b><br>
@@ -554,8 +554,9 @@ function pedirConfirmacao(ids) {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids }),
       });
       caixa.hidden = true;
-      mensagem($("#msg-obras"), r.excluidas.length === 1 ? `Obra nº ${r.excluidas[0]} excluída.`
-        : `${r.excluidas.length} obras excluídas (nº ${r.excluidas.join(", ")}).`, "ok");
+      // números de antes da exclusão; as obras que sobram são renumeradas na lista
+      mensagem($("#msg-obras"), r.excluidas.length === 1 ? `Obra nº ${r.numeros[0]} excluída. As outras foram renumeradas.`
+        : `${r.excluidas.length} obras excluídas (nº ${r.numeros.join(", ")}). As outras foram renumeradas.`, "ok");
       carregarSalvas();
     } catch (err) {
       mensagem($("#msg-exclusao"), err.message, "erro");

@@ -95,7 +95,7 @@ def etapas(banco: Banco, obra_id: int) -> dict[str, Any]:
     if dados is None:
         raise ErroObras("Obra não encontrada.", 404)
     o = dados["obra"]
-    return {"obra": {"id": obra_id, "nome": o.get("nome"), "arquivo": o.get("arquivo")},
+    return {"obra": {"id": obra_id, "numero": o.get("numero"), "nome": o.get("nome"), "arquivo": o.get("arquivo")},
             **etapas_da_obra(situacoes(banco, [obra_id])[obra_id])}
 
 
@@ -115,7 +115,7 @@ def leitura_salva(banco: Banco, obra_id: int) -> dict[str, Any]:
     _montar_hierarquia(grupos, servicos, alertas)
     validacao = validar(obra, grupos, servicos, alertas)
     return {
-        "obra_id": obra_id, "salva": True, "arquivo": obra.get("arquivo"), "aba": obra.get("aba"),
+        "obra_id": obra_id, "numero": obra["numero"], "salva": True, "arquivo": obra.get("arquivo"), "aba": obra.get("aba"),
         "data_importacao": obra.get("data_importacao"),
         "obra": obra, "grupos": grupos, "servicos": servicos, "validacao": validacao, "resumo": validacao["resumo"],
         "alertas": [a for a in alertas if a["tipo"] in ("geral", "servico", "grupo", "total")],
@@ -176,7 +176,7 @@ def excluir(banco: Banco, ids: Iterable[Any], rodando: Iterable[int] = ()) -> di
         raise ErroObras(f"Obra(s) não encontrada(s): {', '.join(map(str, faltando))}.", 404)
     ocupadas = [i for i in ids if i in set(rodando)]
     if ocupadas:
-        nomes = "; ".join(f"nº {i} ({(obras[i]['nome'] or 'sem nome')[:60]})" for i in ocupadas)
+        nomes = "; ".join(f"nº {obras[i]['numero']} ({(obras[i]['nome'] or 'sem nome')[:60]})" for i in ocupadas)
         raise ErroObras(f"O cálculo do cronograma está rodando: {nomes}. Pare o cálculo ou espere terminar antes de excluir.",
                         409)
     arquivos = banco.excluir_obras(ids)
@@ -187,4 +187,5 @@ def excluir(banco: Banco, ids: Iterable[Any], rodando: Iterable[int] = ()) -> di
             apagados.append(str(caminho))
         except FileNotFoundError:
             pass
-    return {"excluidas": ids, "nomes": [obras[i]["nome"] for i in ids], "arquivos_apagados": apagados}
+    return {"excluidas": ids, "numeros": [obras[i]["numero"] for i in ids], "nomes": [obras[i]["nome"] for i in ids],
+            "arquivos_apagados": apagados}

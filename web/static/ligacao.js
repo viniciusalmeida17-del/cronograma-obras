@@ -26,7 +26,7 @@ function desenhar() {
 function desenharResumo() {
   const d = est.dados;
   const r = d.resumo;
-  $("#nome-obra").textContent = `Obra nº ${obraId} · ${d.obra.nome || d.obra.arquivo}`;
+  $("#nome-obra").textContent = `Obra nº ${d.obra.numero} · ${d.obra.nome || d.obra.arquivo}`;
   const faixa = $("#faixa");
   faixa.className = "faixa " + (r.pendentes ? "aviso" : "ok");
   faixa.textContent = (r.pendentes ? "⚠ " : "✔ ") + r.texto;

@@ -133,6 +133,10 @@ a pasta `arquivos_obras/` fica ao lado do banco),
 
 ## Obras salvas
 
+- **Número da obra**: o nº que aparece nas telas (lista, confirmação de exclusão, barra de etapas, títulos, mensagens,
+  nome do Excel exportado) é a **ordem de importação entre as obras que existem**: a mais antiga é a 1. Ao excluir, as
+  que sobram são renumeradas. O id interno do banco não muda e é o que vai nos links (`?obra=`) e na API.
+- As telas mostram só o nome da etapa no topo (Leitura, Ligação, Sequência, Mão de obra, Cronograma), sem numeração.
 - **Lista na tela inicial** (sempre aberta): nº, nome, arquivo, data, total e **Etapa atual**: Leitura, Ligação,
   Sequência, Mão de obra, Cronograma calculado ou Cenário escolhido (a mais avançada a que a obra chegou).
 - **Abrir qualquer etapa** pelos botões de cada obra. As que ainda não podem ser abertas ficam desativadas, com o motivo

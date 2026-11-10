@@ -247,7 +247,7 @@ def parametros_cronograma(banco: Banco, obra_id: int, biblioteca: Biblioteca | N
         "criterios": criterios,
         "avisos": avisos,
         "pendencias_etapa4": estado["pendencias"],
-        "obra": {k: obra.get(k) for k in ("id", "nome", "prazo_valor", "prazo_unidade")},
+        "obra": {k: obra.get(k) for k in ("id", "numero", "nome", "prazo_valor", "prazo_unidade")},
     }
 
 
@@ -502,7 +502,7 @@ def montar_instancia(banco: Banco, obra_id: int, prazo_meses: float, biblioteca:
                      estado: dict[str, Any] | None = None) -> tuple[Instancia, dict[str, Any]]:
     estado = estado or _estado_etapa4(banco, obra_id, biblioteca)
     if estado["pendencias"]:
-        raise ErroCronograma("Resolva as pendências da etapa 4 antes do cronograma: "
+        raise ErroCronograma("Resolva as pendências da mão de obra antes do cronograma: "
                              + "; ".join(p["mensagem"] for p in estado["pendencias"][:5]))
     cal = calendario_da_obra(banco, obra_id)
     params = parametros_cronograma(banco, obra_id, biblioteca)
@@ -840,7 +840,7 @@ def exportar_equipe_excel(banco: Banco, obra_id: int, cenario_id: int | None = N
         cel.font = negrito
     if c.get("equipe_indireta"):
         ws.append([])
-        ws.append(["Equipe indireta (etapa 4)"])
+        ws.append(["Equipe indireta (da mão de obra)"])
         ws[ws.max_row][0].font = negrito
         for e in c["equipe_indireta"]:
             ws.append([e["funcao"], None, None, None, *e["pessoas"][:len(c["semanas"])]])

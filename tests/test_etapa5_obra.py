@@ -93,7 +93,7 @@ def test_sem_data_de_inicio_nao_calcula(tmp_path, arquivo_teste, biblioteca):
     banco = Banco(str(tmp_path / "x.sqlite3"))
     obra = preparar_obra(banco, arquivo_teste, biblioteca)
     etapa4.analisar_obra(banco, obra, biblioteca)
-    with pytest.raises(etapa5.ErroCronograma, match="pendências da etapa 4"):
+    with pytest.raises(etapa5.ErroCronograma, match="pendências da mão de obra"):
         etapa5.montar_instancia(banco, obra, 12, biblioteca)
     resolver_pendencias(banco, obra, biblioteca)
     with pytest.raises(etapa5.ErroCronograma, match="data de início"):

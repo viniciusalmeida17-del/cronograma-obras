@@ -35,15 +35,15 @@ async function chamar(url, opcoes, msgEl = $("#msg-geral"), sucesso = "") {
 
 function desenhar() {
   const d = est.d;
-  $("#nome-obra").textContent = `Obra nº ${obraId} · ${d.obra.nome || d.obra.arquivo}`;
+  $("#nome-obra").textContent = `Obra nº ${d.obra.numero} · ${d.obra.nome || d.obra.arquivo}`;
   $("#link-sequencia").href = `/sequencia?obra=${obraId}`;
   $("#link-cronograma").href = `/cronograma?obra=${obraId}`;
   $("#link-cronograma").classList.toggle("desabilitado", d.pendencias.length > 0);
-  $("#link-cronograma").title = d.pendencias.length ? "Resolva as pendências antes do cronograma" : "Etapa 5: cronograma com datas e equipes";
+  $("#link-cronograma").title = d.pendencias.length ? "Resolva as pendências antes do cronograma" : "Cronograma com datas e equipes";
   const pend = d.pendencias.length;
   $("#faixa").className = "faixa " + (pend ? "aviso" : "ok");
   $("#faixa").textContent = pend
-    ? `⚠ ${pend} pendência(s) obrigatória(s) antes da etapa 5 — veja o Resumo da obra.`
+    ? `⚠ ${pend} pendência(s) obrigatória(s) antes do cronograma — veja o Resumo da obra.`
     : "✔ Sem pendências: todas as atividades têm execução e duração.";
   const ativs = d.atividades;
   const caixas = [
@@ -347,9 +347,9 @@ function desenharResumo() {
   const d = est.d;
   $("#cartao-pendencias").innerHTML = d.pendencias.length
     ? `<h2>Pendências obrigatórias <span class="contador erro">${d.pendencias.length}</span></h2>
-       <p class="discreto">Precisam ser resolvidas antes da etapa 5 (cronograma).</p>
+       <p class="discreto">Precisam ser resolvidas antes do cronograma.</p>
        <ul class="lista-pendencias">${d.pendencias.map((p) => `<li><a data-ir="${p.tipo === "execucao" ? "execucao" : "atividades"}" data-codigo="${p.atividade}">${esc(p.mensagem)}</a></li>`).join("")}</ul>`
-    : `<h2>Pendências</h2><p class="mensagem ok">✔ Nenhuma pendência. A obra está pronta para a etapa 5 (cronograma).</p>`;
+    : `<h2>Pendências</h2><p class="mensagem ok">✔ Nenhuma pendência. A obra está pronta para o cronograma.</p>`;
   $("#tabela-equipe-fixa").innerHTML = d.equipe_fixa.map((e) => `<tr><td>${esc(e.funcao)}</td><td class="num">${fmtH4.format(e.pessoas)}</td></tr>`).join("")
     || `<tr><td colspan="2" class="discreto">Nenhuma equipe indireta encontrada.</td></tr>`;
   const periodo = d.equipe_indireta.filter((e) => !e.toda_obra);
@@ -357,7 +357,7 @@ function desenharResumo() {
     <td>${esc(e.atividade)}: ${esc(ROTULO_PERIODO[e.periodo_de] || "início de " + e.periodo_de)} → ${esc(ROTULO_PERIODO[e.periodo_ate] || "fim de " + e.periodo_ate)}</td></tr>`).join("")
     || `<tr><td colspan="3" class="discreto">—</td></tr>`;
   $("#info-media").textContent = d.semanas_prazo
-    ? `Média de pessoas = horas ÷ (${fmtH.format(d.semanas_prazo)} semanas do prazo × ${d.parametros.horas_semana} h/semana). É só uma referência: o número semana a semana sai na etapa 5.`
+    ? `Média de pessoas = horas ÷ (${fmtH.format(d.semanas_prazo)} semanas do prazo × ${d.parametros.horas_semana} h/semana). É só uma referência: o número semana a semana sai no cronograma.`
     : "Prazo da licitação não informado: sem média de pessoas.";
   $("#tabela-funcoes").innerHTML = d.resumo_funcoes.map((f) => `<tr><td>${esc(f.funcao)}</td><td class="num">${horas(f.horas_ajustadas)}</td>
     <td class="num"><b>${f.media_pessoas != null ? f.media_pessoas.toLocaleString("pt-BR") : "—"}</b></td></tr>`).join("");

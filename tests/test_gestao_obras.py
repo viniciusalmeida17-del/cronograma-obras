@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -306,3 +307,83 @@ def test_paginas_tem_a_barra_de_etapas():
     assert '<details id="salvas"' not in index and 'id="tabela-obras"' in index
     app_js = (estatico / "app.js").read_text(encoding="utf-8")
     assert "confirm(" not in app_js.split("async function salvarObraSalva")[1]   # exclusão sem o confirm do navegador
+
+
+# ------------------------------------------------------------------ número da obra para o usuário (ordem de importação)
+
+
+def test_numero_e_a_ordem_de_importacao_e_renumera_ao_excluir(tmp_path, arquivo_teste):
+    banco = Banco(str(tmp_path / "b.sqlite3"))
+    lida = ler_planilha(arquivo_teste)
+    ids = [banco.salvar_importacao(lida) for _ in range(4)]
+    gestao.excluir(banco, [ids[0]])          # o banco não reaproveita ids: os internos começam "furados"
+    ids = ids[1:] + [banco.salvar_importacao(lida)]
+
+    def numeros():
+        return {o["id"]: o["numero"] for o in gestao.listar(banco)}
+
+    assert numeros() == {ids[0]: 1, ids[1]: 2, ids[2]: 3, ids[3]: 4}
+    assert ids[0] != 1   # o id interno não é o número que o usuário vê
+    # todas as telas usam o mesmo número
+    for i, n in numeros().items():
+        assert banco.carregar_obra(i)["obra"]["numero"] == n == banco.numero_obra(i)
+        assert gestao.etapas(banco, i)["obra"]["numero"] == n
+        assert gestao.etapas(banco, i)["obra"]["id"] == i
+        assert gestao.leitura_salva(banco, i)["numero"] == n
+
+    # excluir a 2ª: as seguintes descem um número; os ids não mudam
+    r = gestao.excluir(banco, [ids[1]])
+    assert r["numeros"] == [2] and r["excluidas"] == [ids[1]]
+    assert numeros() == {ids[0]: 1, ids[2]: 2, ids[3]: 3}
+    # excluir várias de uma vez (a 1ª e a última)
+    r = gestao.excluir(banco, [ids[3], ids[0]])
+    assert r["numeros"] == [1, 3]
+    assert numeros() == {ids[2]: 1}
+    # a próxima importação vem depois de todas as que existem
+    nova = banco.salvar_importacao(lida)
+    assert numeros() == {ids[2]: 1, nova: 2}
+
+
+def test_numero_nas_rotas_e_nas_telas_da_obra(tmp_path, arquivo_teste, biblioteca):
+    app = criar_app(str(tmp_path / "web.sqlite3"))
+    banco = Banco(app.config["CAMINHO_BANCO"])
+    c = app.test_client()
+    lida = ler_planilha(arquivo_teste)
+    velha = banco.salvar_importacao(lida)
+    obra = preparar_obra(banco, arquivo_teste, biblioteca)
+    gestao.excluir(banco, [velha])
+    assert obra != 1
+    assert c.get("/api/importacoes").get_json()[0]["numero"] == 1
+    assert c.get(f"/api/obras/{obra}/etapas").get_json()["obra"]["numero"] == 1
+    assert c.get(f"/api/obras/{obra}/ligacao").get_json()["obra"]["numero"] == 1
+    assert c.get(f"/api/obras/{obra}/rede").get_json()["obra"]["numero"] == 1
+    assert c.get(f"/api/obras/{obra}/mao-de-obra").get_json()["obra"]["numero"] == 1
+    assert c.get(f"/api/obras/{obra}/cronograma/parametros").get_json()["obra"]["numero"] == 1
+    # a mensagem ao salvar uma importação nova usa o número, não o id
+    r = c.post("/api/leitura", data={"arquivo": (open(arquivo_teste, "rb"), "planilha.xlsx")},
+               content_type="multipart/form-data").get_json()
+    r = c.post("/api/importacoes", json={"token": r["token"]}).get_json()
+    assert r["numero"] == 2 and "obra nº 2" in r["mensagem"] and r["id"] != 2
+    # as telas mostram o número que vem da API, não o id da URL
+    estatico = Path(__file__).resolve().parent.parent / "web" / "static"
+    for js in ("ligacao.js", "sequencia.js", "mao_de_obra.js", "cronograma.js", "etapas.js", "app.js"):
+        texto = (estatico / js).read_text(encoding="utf-8")
+        assert "Obra nº ${obraId}" not in texto and "nº ${o.id}" not in texto and "Obra nº ${d.obra.id}" not in texto, js
+
+
+def test_sem_numeracao_das_etapas_nas_telas():
+    import re
+
+    raiz = Path(__file__).resolve().parent.parent
+    for arq in list((raiz / "web" / "static").glob("*.html")) + list((raiz / "web" / "static").glob("*.js")):
+        texto = arq.read_text(encoding="utf-8")
+        assert not re.search(r"[Ee]tapas? \d", texto), arq.name
+    topo = {"index": "Leitura", "ligacao": "Ligação", "sequencia": "Sequência", "mao_de_obra": "Mão de obra",
+            "cronograma": "Cronograma"}
+    for pagina, nome in topo.items():
+        assert f'<span class="etapa">{nome}</span>' in (raiz / "web" / "static" / f"{pagina}.html").read_text(encoding="utf-8")
+    # mensagens de erro do servidor também
+    for arq in ("cronograma/obra.py", "cronograma/modelo.py", "mao_de_obra/obra.py"):
+        codigo = (raiz / arq).read_text(encoding="utf-8")
+        mensagens = re.findall(r'(?:Erro\w+|ValueError)\((f?"[^"]*")', codigo)
+        assert mensagens and not any(re.search(r"etapa \d", m) for m in mensagens), arq
