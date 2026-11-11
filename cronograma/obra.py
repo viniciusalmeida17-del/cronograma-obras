@@ -32,7 +32,8 @@ _RE_DATA = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 VALIDAS = (OTIMO, MELHOR)
 SEMANAS_POR_MES = 4.33
 ENCARGOS_PADRAO = 80.0
-TRANSFERIVEIS_PADRAO = ("Servente", "Pedreiro")
+# livres por padrão; o bombeiro (muitas vezes terceirizado) entra e sai conforme a frente de serviço
+TRANSFERIVEIS_PADRAO = ("Servente", "Pedreiro", "Bombeiro", "Ajudante de bombeiro")
 CRITERIOS = ("proporcional", "mensal", "fixo")
 AVISO_REFERENCIA = "custos de mão de obra de referência da licitação, não os reais"
 
@@ -266,7 +267,7 @@ def parametros_cronograma(banco: Banco, obra_id: int, biblioteca: Biblioteca | N
 def entradas_da_obra(cal: dict[str, Any], funcoes: Iterable[str]) -> dict[str, int]:
     """Entradas na obra por função: 0 = livre, N = até N entradas (1 = uma entrada, a regra de sempre).
 
-    Padrão: livre para Servente e Pedreiro, uma entrada para as outras. Obra com a opção antiga "pode sair e
+    Padrão: livre para Servente, Pedreiro, Bombeiro e Ajudante de bombeiro, uma entrada para as outras. Obra com a opção antiga "pode sair e
     voltar": ligada = livre, desligada = uma entrada.
     """
     salvas = cal.get("entradas")

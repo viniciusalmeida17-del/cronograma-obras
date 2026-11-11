@@ -281,9 +281,9 @@ a biblioteca nova vale para as próximas importações (o banco ganha as colunas
   (detalhe da atividade) aparecem as trocas aplicadas ("Pintor → Servente: 245 h") e dá para mudar só nesta obra,
   com "salvar também na biblioteca padrão" (cópia de segurança antes). A tela de sequência mostra a coluna "Trocas de função".
 - **Entradas na obra** (parâmetros do cronograma, por função; substitui "pode sair e voltar"):
-  **uma entrada** (padrão, menos Servente e Pedreiro) = sobe até o pico e depois só desce;
+  **uma entrada** (padrão, menos Servente, Pedreiro, Bombeiro e Ajudante de bombeiro) = sobe até o pico e depois só desce;
   **até N entradas** = sai e volta até N − 1 vezes, sobe-e-desce dentro de cada entrada, cada ausência com pelo menos
-  a ausência mínima (padrão 2 semanas); **livre** (padrão Servente e Pedreiro) = sai e volta sem limite.
+  a ausência mínima (padrão 2 semanas); **livre** (padrão Servente, Pedreiro, Bombeiro e Ajudante de bombeiro) = sai e volta sem limite.
   Obras com a opção antiga: ligada = livre, desligada = uma entrada.
 - **Custo de saída e volta**: padrão **8 horas da própria função** por pessoa que sai ou volta (ou um valor em R$, ou zero).
   Conta as pessoas que saem e voltam (aumentos além do pico), 2 movimentos cada; é zero quando ninguém sai. Entra no

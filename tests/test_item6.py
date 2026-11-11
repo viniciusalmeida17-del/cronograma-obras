@@ -310,9 +310,10 @@ def test_conversao_da_opcao_antiga():
         {"Servente": 0, "Pedreiro": 1, "Pintor": 0}
     assert etapa5.entradas_da_obra({"entradas": None, "transferiveis": []}, funcoes) == \
         {"Servente": 1, "Pedreiro": 1, "Pintor": 1}
-    # obra nova: Servente e Pedreiro livres, as outras com uma entrada
-    assert etapa5.entradas_da_obra({"entradas": None, "transferiveis": None}, funcoes) == \
-        {"Servente": 0, "Pedreiro": 0, "Pintor": 1}
+    # obra nova: Servente, Pedreiro, Bombeiro e Ajudante de bombeiro livres, as outras com uma entrada
+    assert etapa5.entradas_da_obra({"entradas": None, "transferiveis": None},
+                                   funcoes + ["Bombeiro", "Ajudante de bombeiro", "Eletricista"]) == \
+        {"Servente": 0, "Pedreiro": 0, "Pintor": 1, "Bombeiro": 0, "Ajudante de bombeiro": 0, "Eletricista": 1}
 
 
 def test_salvar_entradas_e_opcao_antiga(tmp_path):

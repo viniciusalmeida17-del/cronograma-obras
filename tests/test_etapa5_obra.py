@@ -74,7 +74,8 @@ def test_parametros_padrao(obra_pronta, biblioteca):
     assert p["prazos"] == [9.0, 10.0, 11.0, 12.0]          # prazo − 3, − 2, − 1 e o próprio
     assert p["custos"]["Pedreiro"]["origem"] == "composicoes" and p["custos"]["Pedreiro"]["referencia"]
     assert any("referência da licitação" in a for a in p["avisos"])
-    assert p["transferiveis"] == ["Servente", "Pedreiro"]   # padrão: podem sair e voltar
+    # padrão: podem sair e voltar (livres)
+    assert p["transferiveis"] == ["Servente", "Pedreiro", "Bombeiro", "Ajudante de bombeiro"]
     assert p["encargos"] == 80
     assert "Pedreiro" in p["funcoes"] and p["pendencias_etapa4"] == []
 
@@ -204,7 +205,7 @@ def test_cenario_de_12_meses_respeita_todas_as_restricoes(obra_pronta, bibliotec
     assert verificar(inst, sol, contratados) == []
     # sobe e desce (funções que não podem sair e voltar), conferido aqui também
     for f in c["funcoes"]:
-        if f["funcao"] in ("Servente", "Pedreiro"):
+        if f["funcao"] in etapa5.TRANSFERIVEIS_PADRAO:
             continue
         serie = f["contratados"]
         pico = serie.index(max(serie))
