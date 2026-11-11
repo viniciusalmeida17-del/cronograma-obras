@@ -13,9 +13,19 @@ from atividades.biblioteca import Biblioteca
 from leitor_planilha.texto import unidade_canonica
 from mao_de_obra import obra as etapa4
 
-from .agenda import DIAS_POR_MES, Instancia, ItemIndireto
+from .agenda import CUSTO_TROCA_HORAS, DIAS_POR_MES, LIVRE, UMA_ENTRADA, Instancia, ItemIndireto
 from .calendario import Calendario, data_limite, para_data, segunda_da_semana
-from .modelo import EQUIPE_MAX, MAQUINAS_MAX, OPERADOR, PROPRIA, TERCEIRIZADA, Modo, modos_da_atividade, tarefas_da_obra
+from .modelo import (
+    EQUIPE_MAX,
+    MAQUINAS_MAX,
+    OPERADOR,
+    PROPRIA,
+    RIGIDA,
+    TERCEIRIZADA,
+    Modo,
+    modos_da_atividade,
+    tarefas_da_obra,
+)
 from .otimizador import IMPOSSIVEL, MELHOR, OTIMO, menor_prazo, otimizar
 
 _RE_DATA = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -224,8 +234,8 @@ def parametros_cronograma(banco: Banco, obra_id: int, biblioteca: Biblioteca | N
         avisos.append("Indiretos: valores da planilha, não os reais (edite a lista de indiretos reais).")
     if any(t["contratado"] is None for t in terceirizados):
         avisos.append("Terceirizados: valor da planilha sem BDI, não o contratado.")
-    transferiveis = cal["transferiveis"] if cal["transferiveis"] is not None else \
-        [f for f in TRANSFERIVEIS_PADRAO if f in funcoes]
+    entradas = entradas_da_obra(cal, funcoes)
+    tipo_troca, custo_troca, horas_troca = custo_troca_da_obra(cal)
     return {
         **cal,
         "prazos": _prazos_validos(cal["prazos"] or prazos_padrao(prazo), prazo),
@@ -236,7 +246,9 @@ def parametros_cronograma(banco: Banco, obra_id: int, biblioteca: Biblioteca | N
         "salarios": cal.get("salarios") or {},
         "salarios_padrao": banco.padrao("salarios") or {},
         "funcoes": funcoes,
-        "transferiveis": transferiveis,
+        "entradas": entradas,
+        "transferiveis": [f for f, n in entradas.items() if n == LIVRE],
+        "custo_troca_tipo": tipo_troca, "custo_troca": custo_troca, "custo_troca_horas": horas_troca,
         "atividades_proprias": atividades,
         "codigos_sequencia": [c for c, a in sorted(rede["atividades"].items(), key=lambda x: x[1]["ordem_biblioteca"])
                               if a["tipo"] != "indireta"],
@@ -249,6 +261,38 @@ def parametros_cronograma(banco: Banco, obra_id: int, biblioteca: Biblioteca | N
         "pendencias_etapa4": estado["pendencias"],
         "obra": {k: obra.get(k) for k in ("id", "numero", "nome", "prazo_valor", "prazo_unidade")},
     }
+
+
+def entradas_da_obra(cal: dict[str, Any], funcoes: Iterable[str]) -> dict[str, int]:
+    """Entradas na obra por função: 0 = livre, N = até N entradas (1 = uma entrada, a regra de sempre).
+
+    Padrão: livre para Servente e Pedreiro, uma entrada para as outras. Obra com a opção antiga "pode sair e
+    voltar": ligada = livre, desligada = uma entrada.
+    """
+    salvas = cal.get("entradas")
+    if salvas is not None:
+        padrao_livres = TRANSFERIVEIS_PADRAO
+    elif cal.get("transferiveis") is not None:
+        salvas, padrao_livres = {f: LIVRE for f in cal["transferiveis"]}, ()
+    else:
+        salvas, padrao_livres = {}, TRANSFERIVEIS_PADRAO
+    res = {}
+    for f in funcoes:
+        if f in salvas and salvas[f] is not None:
+            res[f] = int(salvas[f])
+        else:
+            res[f] = LIVRE if f in padrao_livres else UMA_ENTRADA
+    return res
+
+
+def custo_troca_da_obra(cal: dict[str, Any]) -> tuple[str, float, float]:
+    """(tipo, R$ por pessoa, horas por pessoa) do custo de quem sai ou volta. Padrão: 8 horas da própria função."""
+    tipo = cal.get("custo_troca_tipo")
+    if tipo not in ("horas", "reais"):
+        tipo = "reais" if (cal.get("custo_troca") or 0) > 0 else "horas"   # obra antiga com valor em reais
+    horas = cal.get("custo_troca_horas")
+    horas = CUSTO_TROCA_HORAS if horas is None else float(horas)
+    return tipo, float(cal.get("custo_troca") or 0.0), horas
 
 
 def _real(valor: Any, nome: str, minimo: float, maximo: float) -> float | None:
@@ -325,12 +369,32 @@ def salvar_parametros_cronograma(banco: Banco, obra_id: int, dados: dict[str, An
             custos[f] = round(x, 2)
         c["custos_hora"] = custos
         banco.lembrar_custos_hora(custos)
-    if "transferiveis" in dados:
-        c["transferiveis"] = sorted({str(f) for f in (dados["transferiveis"] or [])})
+    if "transferiveis" in dados and "entradas" not in dados:   # opção antiga: marcada = livre
+        livres = {str(f) for f in (dados["transferiveis"] or [])}
+        atuais = c.get("entradas") or {}
+        c["entradas"] = {**{f: UMA_ENTRADA for f in TRANSFERIVEIS_PADRAO},
+                         **{f: (UMA_ENTRADA if n == LIVRE else n) for f, n in atuais.items()}, **{f: LIVRE for f in livres}}
+        c["transferiveis"] = sorted(livres)
+    if "entradas" in dados:
+        entradas = dict(c.get("entradas") or {})
+        for f, v in (dados["entradas"] or {}).items():
+            if v in (None, ""):
+                entradas.pop(str(f), None)
+                continue
+            if str(v).lower() == "livre":
+                v = LIVRE
+            entradas[str(f)] = _inteiro(v, f"o número de entradas de {f} (0 = livre)", 0, 20)
+        c["entradas"] = entradas
+    if "custo_troca_tipo" in dados:
+        if dados["custo_troca_tipo"] not in ("horas", "reais"):
+            raise ErroCronograma("Custo de quem sai ou volta: use horas da função ou um valor em reais.")
+        c["custo_troca_tipo"] = dados["custo_troca_tipo"]
+    if "custo_troca_horas" in dados:
+        c["custo_troca_horas"] = _real(dados["custo_troca_horas"], "as horas por pessoa que sai ou volta", 0, 1000) or 0.0
     if "min_semanas_reducao" in dados:
         c["min_semanas_reducao"] = _inteiro(dados["min_semanas_reducao"], "a duração mínima de uma redução (semanas)", 1, 12)
     if "custo_troca" in dados:
-        c["custo_troca"] = _real(dados["custo_troca"], "o custo por pessoa que sai ou entra", 0, 100000) or 0.0
+        c["custo_troca"] = _real(dados["custo_troca"], "o custo por pessoa que sai ou volta", 0, 100000) or 0.0
     if "maquinas_max" in dados:
         c["maquinas_max"] = _inteiro(dados["maquinas_max"], "o máximo de máquinas por equipamento", 1, 50)
     if "dividir_terceirizadas" in dados:
@@ -526,8 +590,9 @@ def montar_instancia(banco: Banco, obra_id: int, prazo_meses: float, biblioteca:
         custo_hora={f: v["custo_hora"] for f, v in custos.items()},
         indiretos=_itens_reais(params["indiretos_reais"]),
         limite_rigidas=c["limite_rigidas"], max_por_funcao=c["max_por_funcao"], max_total=c["max_pessoas_total"],
-        transferiveis=set(params["transferiveis"]), min_semanas_reducao=c.get("min_semanas_reducao") or 2,
-        custo_troca=c.get("custo_troca") or 0.0,
+        entradas=dict(params["entradas"]), min_semanas_reducao=c.get("min_semanas_reducao") or 2,
+        custo_troca=params["custo_troca"] if params["custo_troca_tipo"] == "reais" else 0.0,
+        custo_troca_horas=params["custo_troca_horas"] if params["custo_troca_tipo"] == "horas" else 0.0,
         receitas=receitas_da_obra(dados["servicos"], rede["atividades"], prazo_lic, c.get("criterios") or {}),
     )
     terc = {t["codigo"]: (t["contratado"] if t["contratado"] is not None else t["planilha"])
@@ -619,6 +684,228 @@ def diagnostico(inst: Instancia, ctx: dict[str, Any]) -> dict[str, Any]:
             "faltam_dias_uteis": max(0, base - inst.horizonte)}
 
 
+# --------------------------------------------------------------------------- continuidade: procurar melhorias
+
+TEMPO_MELHORIAS = 20      # segundos por alternativa testada
+FUNCOES_MELHORIAS = 3     # as funções com maior custo de horas paradas
+
+
+def _destino_troca(funcao: str, funcoes_empresa: list[str], juntar_possivel: dict[str, str]) -> str | None:
+    """Quem poderia fazer o serviço da função: a da aba Juntar funções; senão Servente (ajudantes) ou Pedreiro."""
+    from leitor_planilha.texto import normalizar
+
+    if juntar_possivel.get(funcao) and juntar_possivel[funcao] != funcao:
+        return juntar_possivel[funcao]
+    n = normalizar(funcao)
+    destino = "Servente" if n.startswith(("AJUDANTE", "AUXILIAR", "SERVENTE")) else "Pedreiro"
+    return destino if destino in funcoes_empresa and destino != funcao else None
+
+
+def candidatas_melhoria(inst: Instancia, atividades: dict[str, dict[str, Any]], continuidade: list[dict[str, Any]],
+                        funcoes_empresa: list[str], juntar_possivel: dict[str, str]) -> list[dict[str, Any]]:
+    """Alternativas a testar para as 3 funções com maior custo de horas paradas, na atividade que puxa a entrada
+    e na que segura a saída: tornar flexível (se rígida), trocar a função, terceirizar (se a execução é
+    'perguntar') e permitir 2 entradas (se a função tem uma entrada só)."""
+    vistas, res = set(), []
+
+    def add(c: dict[str, Any]) -> None:
+        chave = (c["tipo"], c.get("atividade"), c.get("funcao") if c["tipo"] in ("trocar", "entradas") else None)
+        if chave not in vistas:
+            vistas.add(chave)
+            res.append(c)
+
+    linhas = [l for l in continuidade if (l.get("custo_horas_paradas") or 0) > 0][:FUNCOES_MELHORIAS]
+    for l in linhas:
+        f = l["funcao"]
+        for papel in ("puxa_entrada", "segura_saida"):
+            u = l.get(papel)
+            if not u or u["codigo"] not in inst.tarefas:
+                continue
+            cod = u["codigo"]
+            t = inst.tarefas[cod]
+            a4 = atividades.get(cod) or {}
+            base = {"atividade": cod, "nome": t.nome, "funcao": f, "papel": papel}
+            if t.tipo == RIGIDA and cod != inst.final:
+                add({**base, "tipo": "flexivel"})
+            destino = _destino_troca(f, funcoes_empresa, juntar_possivel)
+            if destino and f != OPERADOR and t.propria and any(m.equipe.get(f) for m in t.modos):
+                add({**base, "tipo": "trocar", "destino": destino})
+            if t.propria and a4.get("execucao_padrao") == "perguntar":
+                add({**base, "tipo": "terceirizar"})
+        if inst.entradas_de(f) == UMA_ENTRADA:
+            add({"tipo": "entradas", "funcao": f, "valor": 2, "atividade": None})
+    return res
+
+
+def instancia_com(inst: Instancia, c: dict[str, Any], juntar: dict[str, str] | None = None,
+                  custo_hora_de: Callable[[str], float | None] | None = None, dividir_terceirizadas: bool = True
+                  ) -> tuple[Instancia, float, str]:
+    """Cópia da instância com só uma mudança. Devolve (instância, custo extra fora da mão de obra própria, texto)."""
+    import copy
+    import dataclasses
+
+    from mao_de_obra.calculo import destino_final
+
+    from .modelo import FLEXIVEL, PARTES_MAX
+
+    tarefas = copy.deepcopy(inst.tarefas)
+    entradas = dict(inst.entradas)
+    custo_hora = dict(inst.custo_hora)
+    extra = 0.0
+    cod = c.get("atividade")
+    nome = f"{cod} ({c.get('nome')})" if c.get("nome") else cod
+    if c["tipo"] == "flexivel":
+        tarefas[cod].tipo = FLEXIVEL
+        texto = f"Tornar a {nome} flexível"
+    elif c["tipo"] == "entradas":
+        entradas[c["funcao"]] = int(c["valor"])
+        texto = f"Permitir {c['valor']} entradas na obra para {c['funcao']}"
+    elif c["tipo"] == "trocar":
+        f = c["funcao"]
+        dest = destino_final(c["destino"], [], juntar or {})
+        t = tarefas[cod]
+        for m in t.modos:   # mesmas horas e pessoas, na função de destino (a duração não muda)
+            if m.equipe.get(f):
+                m.equipe[dest] = m.equipe.get(dest, 0) + m.equipe.pop(f)
+            if f in m.horas:
+                m.horas[dest] = m.horas.get(dest, 0.0) + m.horas.pop(f)
+        if t.funcao_principal == f:
+            t.funcao_principal = dest
+        if dest not in custo_hora:
+            custo_hora[dest] = (custo_hora_de(dest) if custo_hora_de else None) or 0.0
+        texto = (f"Trocar {f} por {c['destino']} na {nome} ({f} > {c['destino']}; é só sugestão: "
+                 "confira se a equipe faz o serviço)")
+    elif c["tipo"] == "terceirizar":
+        t = tarefas[cod]
+        m0 = inst.tarefas[cod].modos[0]
+        horas = dict(m0.horas) if m0.horas else {
+            f: q * inst.duracao(cod, 0, 0) * inst.calendario.horas_dia(0) for f, q in m0.equipe.items()}
+        extra = sum(h * inst.custo_hora.get(f, 0.0) for f, h in horas.items())
+        t.execucao = TERCEIRIZADA
+        t.travada = None
+        t.partes_max = PARTES_MAX if dividir_terceirizadas else 1
+        texto = (f"Terceirizar a {nome} (considerando que o terceirizado cobra a mesma mão de obra: "
+                 f"{sum(horas.values()):.0f} h = {_reais(extra)})")
+    else:
+        raise ErroCronograma("Sugestão desconhecida.")
+    nova = dataclasses.replace(inst, tarefas=tarefas, entradas=entradas, custo_hora=custo_hora, transferiveis=set())
+    return nova, extra, texto
+
+
+def _reais(v: float) -> str:
+    return "R$ " + f"{v:,.0f}".replace(",", ".")
+
+
+def testar_melhorias(inst: Instancia, candidatas: list[dict[str, Any]], base_custo: float, base_ocio: float,
+                     tempo: float, equipe_padrao: dict[str, int] | None = None, juntar: dict[str, str] | None = None,
+                     custo_hora_de: Callable[[str], float | None] | None = None, dividir_terceirizadas: bool = True,
+                     progresso: Callable[[dict[str, Any]], None] | None = None, parar: threading.Event | None = None,
+                     prazo: float | None = None, solucao_base: dict[str, Any] | None = None,
+                     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Recalcula o cenário com cada mudança (só ela) e devolve (as que melhoram, ordenadas pelo ganho; todas).
+
+    `solucao_base`: cronograma do cenário atual, ponto de partida de cada teste (continua valendo com a mudança),
+    para o ganho não ser ruído do tempo limite.
+    """
+    sugestoes, testadas = [], []
+    for k, cand in enumerate(candidatas):
+        if parar is not None and parar.is_set():
+            break
+        if progresso:
+            progresso({"evento": "inicio", "cenario": k, "n": len(candidatas), "prazo": prazo})
+        alt, extra, texto = instancia_com(inst, cand, juntar, custo_hora_de, dividir_terceirizadas)
+        res = otimizar(alt, tempo, equipe_padrao, parar=parar, solucoes_extra=[solucao_base] if solucao_base else None)
+        item = {**cand, "texto": texto, "situacao": res["situacao"]}
+        if res["situacao"] in VALIDAS:
+            custo = res["custo_total"] + extra
+            item.update(custo_total=round(custo, 2), ociosidade=res["ociosidade"], custo_extra=round(extra, 2),
+                        ganho=round(base_custo - custo, 2), ganho_ociosidade=round(base_ocio - res["ociosidade"], 2),
+                        termino=res["termino"], pico=res["pico"])
+            if item["ganho"] > 1:
+                sugestoes.append(item)
+        testadas.append(item)
+    sugestoes.sort(key=lambda x: -x["ganho"])
+    return sugestoes, testadas
+
+
+def procurar_melhorias(banco: Banco, obra_id: int, cenario_id: int | None = None, biblioteca: Biblioteca | None = None,
+                       tempo: float | None = None, progresso: Callable[[dict[str, Any]], None] | None = None,
+                       parar: threading.Event | None = None) -> dict[str, Any]:
+    """Para as 3 funções com maior custo de horas paradas, testa (recalculando o cenário com só aquela mudança)
+    tornar flexível, trocar a função, terceirizar e permitir 2 entradas. Mostra só as que melhoram."""
+    import time
+
+    from mao_de_obra.funcoes import carregar_funcoes
+
+    if cenario_id is None:
+        escolhido = next((c for c in banco.listar_cenarios(obra_id) if c["escolhido"]), None)
+        if escolhido is None:
+            raise ErroCronograma("Escolha um cenário antes de procurar melhorias.")
+        cenario_id = escolhido["id"]
+    c = banco.carregar_cenario(int(cenario_id))
+    if c is None or c["obra_id"] != obra_id:
+        raise ErroCronograma("Cenário não encontrado nesta obra.")
+    if c["situacao"] not in VALIDAS:
+        raise ErroCronograma("Este cenário não tem cronograma.")
+    continuidade = c["detalhes"].get("continuidade")
+    if continuidade is None:
+        raise ErroCronograma("Recalcule o cronograma antes de procurar melhorias (o cálculo é de uma versão anterior).")
+    tempo = float(tempo if tempo is not None else TEMPO_MELHORIAS)
+    estado = _estado_etapa4(banco, obra_id, biblioteca)
+    inst, ctx = montar_instancia(banco, obra_id, c["prazo_meses"], biblioteca, estado)
+    tabela = carregar_funcoes()
+    candidatas = candidatas_melhoria(inst, {a["codigo"]: a for a in estado["atividades"]}, continuidade,
+                                     tabela.funcoes(), tabela.juntar_possivel)
+    inicio = time.monotonic()
+    # o cenário atual recalculado com o mesmo tempo: base justa e ponto de partida das alternativas
+    if progresso:
+        progresso({"evento": "inicio", "cenario": 0, "n": len(candidatas) + 1, "prazo": c["prazo_meses"]})
+    base = otimizar(inst, tempo, ctx["equipe_padrao"], parar=parar)
+    base_custo, base_ocio, solucao_base = c["custo_total"], c["ociosidade"], None
+    if base["situacao"] in VALIDAS:
+        solucao_base = base.get("solucao")
+        base_custo, base_ocio = base["custo_total"], base["ociosidade"]
+
+    def prog(info: dict[str, Any]) -> None:
+        if progresso:
+            progresso({**info, "cenario": info["cenario"] + 1, "n": len(candidatas) + 1})
+
+    sugestoes, testadas = testar_melhorias(
+        inst, candidatas, base_custo, base_ocio, tempo, ctx["equipe_padrao"],
+        (estado.get("juntar") or {}).get("obra") or {},
+        lambda f: custos_efetivos(banco, obra_id, [f])[f]["custo_hora"],
+        bool(banco.carregar_calendario(obra_id).get("dividir_terceirizadas", 1)), prog, parar, c["prazo_meses"],
+        solucao_base)
+    resultado = {"cenario_id": c["id"], "prazo_meses": c["prazo_meses"],
+                 "base": {"custo_total": base_custo, "ociosidade": base_ocio},
+                 "sugestoes": sugestoes, "testadas": testadas, "tempo_por_teste": tempo,
+                 "segundos": round(time.monotonic() - inicio, 1), "interrompido": bool(parar is not None and parar.is_set())}
+    banco.gravar_melhorias(c["id"], resultado)
+    return resultado
+
+
+def aplicar_melhoria(banco: Banco, obra_id: int, acao: dict[str, Any], biblioteca: Biblioteca | None = None) -> None:
+    """Grava na obra a mudança de uma sugestão do "Procurar melhorias" (o cenário é recalculado depois)."""
+    from atividades import obra as etapa3
+
+    tipo, cod, f = acao.get("tipo"), acao.get("atividade"), acao.get("funcao")
+    try:
+        if tipo == "flexivel":
+            etapa3.editar_atividade_obra(banco, obra_id, cod, tipo="flexivel")
+        elif tipo == "entradas":
+            salvar_parametros_cronograma(banco, obra_id, {"entradas": {f: int(acao.get("valor") or 2)}})
+        elif tipo == "trocar":
+            atual = (banco.carregar_rede(obra_id)["atividades"].get(cod) or {}).get("trocar_funcoes") or ""
+            novo = "; ".join(x for x in (atual, f"{f} > {acao.get('destino')}") if x)
+            etapa4.definir_trocas(banco, obra_id, cod, novo, biblioteca=biblioteca)
+        elif tipo == "terceirizar":
+            etapa4.definir_execucao(banco, obra_id, [cod], TERCEIRIZADA, biblioteca)
+        else:
+            raise ErroCronograma("Sugestão desconhecida.")
+    except (etapa4.ErroMaoDeObra, etapa3.ErroObra) as exc:
+        raise ErroCronograma(str(exc))
+
+
 # --------------------------------------------------------------------------- períodos e equipe indireta
 
 
@@ -668,6 +955,7 @@ def calcular_cenario(banco: Banco, obra_id: int, prazo_meses: float, biblioteca:
     res = otimizar(inst, limite, ctx["equipe_padrao"], progresso, parar, solucoes_extra=solucoes_extra)
     res["prazo_meses"] = prazo_meses
     res["data_limite"] = inst.limite.isoformat()
+    res["entradas"] = {f: inst.entradas_de(f) for f in inst.funcoes}
     res["avisos_custos"] = ctx["avisos"]
     res["custo_terceirizados"] = ctx["custo_terceirizados"]
     if res["situacao"] not in VALIDAS:
@@ -730,6 +1018,7 @@ def comparacao(banco: Banco, obra_id: int) -> dict[str, Any]:
             "principal": principal is not None and c["id"] == principal["id"],
             "termino": c["termino"], "pico": c["pico"], "homem_semana": c["homem_semana"], "ociosidade": c["ociosidade"],
             "custo_mao_de_obra": c["custo_mao_de_obra"], "custo_indiretos": c["custo_indiretos"],
+            "custo_saida_volta": c.get("custo_saida_volta"),
             "custo_total": c["custo_total"], "receita_variavel": c.get("receita_variavel"),
             "resultado": resultado(c) if c["situacao"] in VALIDAS else None,
             "escolhido": c["escolhido"], "mais_barato": c["id"] == melhor, "melhor_resultado": c["id"] == melhor,
@@ -783,7 +1072,8 @@ def detalhe_cenario(banco: Banco, obra_id: int, cenario_id: int | None = None) -
     c.update({k: det.get(k) for k in ("caminho_critico", "indiretos", "menor_prazo", "origem", "limite_inferior",
                                        "horas_pagas", "horas_ocupadas", "dias_uteis", "periodos_indiretas",
                                        "equipe_indireta", "mensagem", "receitas", "horas_feriado", "ociosidade_funcao",
-                                       "causas_ociosidade", "diagnostico", "avisos_custos", "custo_terceirizados")})
+                                       "causas_ociosidade", "diagnostico", "avisos_custos", "custo_terceirizados",
+                                       "continuidade", "saida_volta_funcao", "entradas", "melhorias")})
     if c.get("receita_variavel") is None:
         c["receita_variavel"] = det.get("receita_variavel")
     if c.get("resultado") is None and c.get("custo_total") is not None:

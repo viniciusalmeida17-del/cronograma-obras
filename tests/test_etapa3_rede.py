@@ -71,7 +71,7 @@ def test_toda_atividade_tem_sucessor_ou_liga_ao_fim(rede):
 
 
 def test_dependencias_da_biblioteca_com_espera(rede):
-    assert dependencias_de(rede, "FUN-05") == [Dependencia("FUN-04", 3, "II", "du")]
+    assert dependencias_de(rede, "FUN-05") == [Dependencia("FUN-04", 3, "II", "d")]
     assert set(map(str, dependencias_de(rede, "QUA-03"))) == {"QUA-02+28d", "COB-02"}
     assert set(map(str, dependencias_de(rede, "PIN-01"))) == {"REV-02:II+20du", "REV-03"}
     # só a REV-01 espera a cura (EST-03); o resto segue em paralelo

@@ -30,6 +30,7 @@ function desenhar() {
     ["Total (sem BDI)", reais(r.total)],
     ["Total (com BDI)", reais(r.total_bdi)],
   ];
+  $("#prazos-espera").value = dados.prazos_espera || "pratica";
   $("#numeros").innerHTML = caixas.map(([t, v]) => `<div class="numero"><span>${t}</span><b>${v}</b></div>`).join("");
 
   $("#tabela-sequencia tbody").innerHTML = dados.sequencia.map((a) => linhaAtividade(a) + (editando === a.codigo ? linhaEdicao(a) : "")).join("");
@@ -44,12 +45,16 @@ function linhaAtividade(a) {
   const deps = a.dependencias
     .map((d) => `<span class="dep ${d.origem}" title="${ROTULO_ORIGEM[d.origem] || ""}">${d.depende_de}${d.tipo === "II" ? "<b>:II</b>" : ""}${d.espera_dias ? `<b>+${d.espera_dias}${d.unidade || "d"}</b>` : ""}</span>`)
     .join(" ");
-  return `<tr class="tipo-${a.tipo} ${editando === a.codigo ? "em-edicao" : ""}">
+  const dica = [`${ROTULO_TIPO[a.tipo]}: ${a.criterio_tipo || ""}`, a.fonte ? `Fonte: ${a.fonte}` : "",
+    a.tem_norma ? `Prática: ${a.depende_de_pratica || "início"} · Norma: ${a.depende_de_norma || "início"}` : ""].filter(Boolean).join("\n");
+  const trocas = (a.trocar_funcoes || "").split(";").map((t) => t.trim()).filter(Boolean);
+  return `<tr class="tipo-${a.tipo} ${editando === a.codigo ? "em-edicao" : ""}" title="${esc(dica)}">
     <td class="num">${a.posicao}</td>
     <td class="nowrap"><b>${a.codigo}</b></td>
-    <td class="desc">${esc(a.nome)}<span class="linha-excel">${esc(a.etapa || "")}${a.editada ? " · <b>editada nesta obra</b>" : ""}</span></td>
+    <td class="desc">${esc(a.nome)}<span class="linha-excel">${esc(a.etapa || "")}${a.editada ? " · <b>editada nesta obra</b>" : ""}${a.fonte ? ` · <span class="fonte">${esc(a.fonte.split("]")[0] + (a.fonte.includes("]") ? "]" : ""))}</span>` : ""}</span></td>
     <td><span class="selo-tipo ${a.tipo}">${ROTULO_TIPO[a.tipo]}</span></td>
-    <td class="deps">${deps || '<span class="discreto">início</span>'}</td>
+    <td class="trocas">${trocas.length ? trocas.map((t) => `<span class="troca">${esc(t.replace(">", "→"))}</span>`).join(" ") : '<span class="discreto">—</span>'}</td>
+    <td class="deps">${a.usa_norma ? '<span class="selo-norma" title="Dependências com os prazos de norma">norma</span> ' : ""}${deps || '<span class="discreto">início</span>'}</td>
     <td class="num">${a.n_itens}</td>
     <td class="num">${a.n_itens ? reais(a.total_bdi) : '<span class="discreto">sem custo</span>'}</td>
     <td><button type="button" class="secundario pequeno" data-editar="${a.codigo}">Editar</button></td>
@@ -59,7 +64,7 @@ function linhaAtividade(a) {
 function linhaEdicao(a) {
   const depsTexto = a.dependencias.filter((d) => d.origem !== "fim").map((d) => d.depende_de + (d.tipo === "II" ? ":II" : "") + (d.espera_dias ? `+${d.espera_dias}${d.unidade || "d"}` : "")).join(", ");
   const temFim = a.dependencias.some((d) => d.origem === "fim");
-  return `<tr class="edicao"><td colspan="8">
+  return `<tr class="edicao"><td colspan="9">
     <form id="form-edicao" class="form-edicao">
       <label>Tipo
         <select name="tipo">${["rigida", "flexivel", "aguardar"].map((t) => `<option value="${t}" ${t === a.tipo ? "selected" : ""}>${ROTULO_TIPO[t]}</option>`).join("")}</select>
@@ -109,6 +114,20 @@ document.addEventListener("submit", async (e) => {
     mensagem($("#msg-geral"), `${cod} atualizada nesta obra.` + (r.backup_biblioteca ? ` Biblioteca padrão gravada (cópia de segurança: ${r.backup_biblioteca}).` : ""), "ok");
   } catch (err) {
     mensagem($("#msg-edicao"), err.message, "erro");
+  }
+});
+
+$("#prazos-espera").addEventListener("change", async (e) => {
+  const prazos = e.target.value;
+  try {
+    dados = await api(`/api/obras/${obraId}/prazos-espera`, { json: { prazos } });
+    desenhar();
+    mensagem($("#msg-prazos"), prazos === "norma"
+      ? `Prazos de norma aplicados: ${dados.atividades_norma.length} atividade(s) mudaram (marcadas com "norma"). Recalcule o cronograma.`
+      : "Prazos de prática aplicados. Recalcule o cronograma.", "ok");
+  } catch (err) {
+    e.target.value = dados.prazos_espera || "pratica";
+    mensagem($("#msg-prazos"), err.message, "erro");
   }
 });
 

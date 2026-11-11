@@ -34,7 +34,7 @@ def test_tabela_de_funcoes(tabela_funcoes):
 def test_biblioteca_com_colunas_novas(biblioteca):
     assert len(biblioteca.atividades) == 80
     est03 = biblioteca.atividades["EST-03"]
-    assert est03.duracao_fixa_dias == 28
+    assert est03.duracao_fixa_dias == 21
     assert biblioteca.atividades["MET-01"].execucao_padrao == "terceirizada"
     assert biblioteca.atividades["ELE-04"].execucao_padrao == "perguntar"
     fun03 = biblioteca.atividades["FUN-03"]

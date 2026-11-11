@@ -129,12 +129,15 @@ class Tarefa:
         return self.partes_max > 1 and not any(m.corridos for m in self.modos)
 
 
-def equipe_proporcional(horas: Mapping[str, float], principal_pessoas: int) -> tuple[str | None, dict[str, int]]:
-    """Mesma regra da etapa 4: a principal recebe N; as outras teto(N × h ÷ h principal), mínimo 1."""
+def equipe_proporcional(horas: Mapping[str, float], principal_pessoas: int, principal: str | None = None
+                        ) -> tuple[str | None, dict[str, int]]:
+    """Mesma regra da etapa 4: a principal (a de mais horas, ou a informada) recebe N; as outras
+    teto(N × h ÷ h principal), mínimo 1."""
     horas = {f: h for f, h in horas.items() if h > 0}
     if not horas:
         return None, {}
-    principal = max(horas, key=lambda f: (horas[f], f))
+    if principal not in horas:
+        principal = max(horas, key=lambda f: (horas[f], f))
     hp = horas[principal]
     return principal, {f: principal_pessoas if f == principal else max(1, _teto(principal_pessoas * h / hp))
                        for f, h in horas.items()}
@@ -158,6 +161,7 @@ def modos_por_horas(
     maquinas_max: int | None = None,
     dias_minimos: int | None = None,
     propria: bool = True,
+    principal: str | None = None,
 ) -> list[Modo]:
     """Modos com 1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20 pessoas da função principal (até a máxima) ou só o travado.
 
@@ -173,7 +177,7 @@ def modos_por_horas(
     tamanhos = [travada] if travada else (tamanhos_de_equipe(int(equipe_max)) if horas else [1])
     candidatos: list[Modo] = []
     for n in tamanhos:
-        _, equipe = equipe_proporcional(horas, n)
+        _, equipe = equipe_proporcional(horas, n, principal)
         opcoes_maq: list[dict[str, int]] = []
         if not equip:
             opcoes_maq.append({})
@@ -222,7 +226,8 @@ def modos_da_atividade(a: Mapping[str, Any], travada: int | None = None, jornada
     if tem_horas:
         return modos_por_horas(a.get("horas_ajustadas") or {}, a.get("horas_equipamento") or {},
                                calc.get("maquinas") or {}, equipe_max or a.get("equipe_max") or EQUIPE_MAX, travada,
-                               jornadas, maquinas_max, a.get("dias_concretagem"), execucao != TERCEIRIZADA)
+                               jornadas, maquinas_max, a.get("dias_concretagem"), execucao != TERCEIRIZADA,
+                               a.get("funcao_principal"))
     if dur.get("dias"):
         return [Modo(dias_uteis=int(dur["dias"]), dias_minimos=a.get("dias_concretagem"))]
     return []

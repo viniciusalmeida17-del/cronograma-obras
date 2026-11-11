@@ -23,6 +23,9 @@ from .modelo import AGUARDAR, ATIVIDADE_FINAL, RIGIDA, Elo, Tarefa
 DIAS_POR_MES = 30.4375
 LIMITE_RIGIDAS = 5
 MIN_SEMANAS_REDUCAO = 2
+LIVRE = 0                 # entradas na obra: 0 = livre (sai e volta sem limite); N = até N entradas
+UMA_ENTRADA = 1
+CUSTO_TROCA_HORAS = 8.0   # padrão: cada pessoa que sai ou volta custa 8 horas da própria função
 
 
 @dataclass
@@ -54,15 +57,20 @@ class Instancia:
     max_por_funcao: dict[str, int] = field(default_factory=dict)
     max_total: int | None = None
     final: str = ATIVIDADE_FINAL
-    transferiveis: set[str] = field(default_factory=set)            # funções que podem sair e voltar
+    transferiveis: set[str] = field(default_factory=set)            # (antigo) funções livres para sair e voltar
     min_semanas_reducao: int = MIN_SEMANAS_REDUCAO
-    custo_troca: float = 0.0                                        # R$ por pessoa que sai ou entra (transferíveis)
+    custo_troca: float = 0.0                                        # R$ por pessoa que sai ou volta
     receitas: list[ItemIndireto] = field(default_factory=list)      # receita com critério "mensal"
+    entradas: dict[str, int] = field(default_factory=dict)          # função -> 0 (livre) ou até N entradas (padrão 1)
+    custo_troca_horas: float = 0.0                                  # horas da própria função por pessoa que sai ou volta
 
     def __post_init__(self) -> None:
         if self.final not in self.tarefas:
             self.final = None  # type: ignore[assignment]
-        self.transferiveis = set(self.transferiveis or ())
+        self.entradas = dict(self.entradas or {})
+        for f in self.transferiveis or ():
+            self.entradas.setdefault(f, LIVRE)
+        self.transferiveis = {f for f, n in self.entradas.items() if n == LIVRE}
         self.ordem = ordem_tarefas(self.tarefas)
         self.sucessores: dict[str, list[tuple[str, Elo]]] = defaultdict(list)
         for t in self.tarefas.values():
@@ -116,6 +124,15 @@ class Instancia:
 
     def fim_da_obra(self, sol: Mapping[str, Mapping[str, Any]]) -> int:
         return max(a["fim"] for a in sol.values())
+
+    def entradas_de(self, funcao: str) -> int:
+        """0 = livre; N = até N entradas na obra (1 = sobe até o pico e depois só desce)."""
+        n = self.entradas.get(funcao, UMA_ENTRADA)
+        return LIVRE if n is None else int(n)
+
+    def custo_movimento(self, funcao: str) -> float:
+        """R$ por pessoa que sai ou volta."""
+        return self.custo_troca + self.custo_troca_horas * self.custo_hora.get(funcao, 0.0)
 
 
 def ordem_tarefas(tarefas: Mapping[str, Tarefa]) -> list[str]:
@@ -260,8 +277,7 @@ def custo_rapido(inst: Instancia, sol: Mapping[str, Mapping[str, Any]]) -> float
                 if s not in pagas:
                     pagas[s] = horas_pagas_semana(inst, s)
                 total += c * pagas[s] * custo
-        if f in inst.transferiveis and inst.custo_troca:
-            total += inst.custo_troca * sum(abs(b - a) for a, b in zip([0] + serie, serie + [0]))
+    total += custo_saida_volta(inst, contratados)[0]
     return total + custo_por_periodo(inst, sol, inst.indiretos)[0]
 
 
@@ -417,6 +433,99 @@ def reducao_respeitada(serie: list[int], semanas: int) -> bool:
     return True
 
 
+def periodos_na_obra(serie: list[int]) -> list[tuple[int, int]]:
+    """Entradas na obra: trechos seguidos de semanas com alguém contratado [(primeira, última)]."""
+    res: list[tuple[int, int]] = []
+    for w, v in enumerate(serie):
+        if v > 0:
+            if res and res[-1][1] == w - 1:
+                res[-1] = (res[-1][0], w)
+            else:
+                res.append((w, w))
+    return res
+
+
+def voltas(serie: list[int]) -> int:
+    """Pessoas que saíram e voltaram: aumentos além do necessário para chegar ao pico (cada uma = 1 saída + 1 volta)."""
+    subidas = sum(max(0, b - a) for a, b in zip([0] + list(serie), list(serie)))
+    return subidas - max(serie, default=0)
+
+
+def custo_saida_volta(inst: Instancia, contratados: Mapping[str, list[int]]) -> tuple[float, dict[str, dict[str, Any]]]:
+    """Custo de saída e volta de equipe: cada pessoa que sai e volta conta 2 movimentos × custo por movimento."""
+    total = 0.0
+    por_funcao = {}
+    for f, serie in contratados.items():
+        n = voltas(list(serie))
+        if n <= 0:
+            continue
+        custo = 2 * n * inst.custo_movimento(f)
+        por_funcao[f] = {"pessoas": n, "movimentos": 2 * n, "custo": round(custo, 2)}
+        total += custo
+    return total, por_funcao
+
+
+def entradas_respeitadas(serie: list[int], entradas: int, semanas: int) -> str | None:
+    """Erro (texto) se a série não respeita "até N entradas", ausências de pelo menos `semanas` e sobe-e-desce
+    dentro de cada entrada. None se está tudo certo."""
+    per = periodos_na_obra(serie)
+    if len(per) > entradas:
+        return f"{len(per)} entradas na obra (máximo {entradas})"
+    for (a0, a1), (b0, _) in zip(per, per[1:]):
+        if b0 - a1 - 1 < semanas:
+            return f"ausência de {b0 - a1 - 1} semana(s) (mínimo {semanas})"
+    for p0, p1 in per:
+        trecho = list(serie[p0:p1 + 1])
+        if trecho != envelope_sobe_desce(trecho):
+            return "contratados diminuem e depois aumentam dentro de uma entrada"
+    return None
+
+
+def series_com_entradas(serie: list[int], entradas: int, semanas: int, custo_semana: list[float], custo_mov: float
+                        ) -> list[int]:
+    """Contratados mínimos com até N entradas: escolhe (guloso) os vales sem serviço de pelo menos `semanas` em que
+    sair compensa (semanas pagas economizadas − custo de saída e volta) e faz o sobe-e-desce em cada entrada."""
+    pos = [w for w, v in enumerate(serie) if v > 0]
+    if not pos:
+        return list(serie)
+    vales = []
+    w = pos[0]
+    while w <= pos[-1]:
+        if serie[w] == 0:
+            ini = w
+            while serie[w] == 0:
+                w += 1
+            if w - ini >= semanas:
+                vales.append((ini, w - 1))
+        w += 1
+
+    def montar(escolhidos: list[tuple[int, int]]) -> list[int]:
+        res = [0] * len(serie)
+        cortes = sorted(escolhidos)
+        inicio = 0
+        for a, b in cortes + [(len(serie), len(serie))]:
+            res[inicio:a] = envelope_sobe_desce(list(serie[inicio:a]))
+            inicio = b + 1
+        return res
+
+    def custo(s: list[int]) -> float:
+        return sum(c * k for c, k in zip(s, custo_semana)) + 2 * voltas(s) * custo_mov
+
+    escolhidos: list[tuple[int, int]] = []
+    atual = montar(escolhidos)
+    melhor = custo(atual)
+    while len(escolhidos) < entradas - 1:
+        candidatos = [(custo(montar(escolhidos + [v])), v) for v in vales if v not in escolhidos]
+        if not candidatos:
+            break
+        c, v = min(candidatos)
+        if c >= melhor - 0.01:
+            break
+        escolhidos.append(v)
+        melhor, atual = c, montar(escolhidos)
+    return atual
+
+
 def semanas_do_cronograma(inst: Instancia, fim_offset: int) -> int:
     """Número de semanas do início até o término (inclusive)."""
     cal = inst.calendario
@@ -425,11 +534,12 @@ def semanas_do_cronograma(inst: Instancia, fim_offset: int) -> int:
 
 def contratados_minimos(inst: Instancia, sol: Mapping[str, Mapping[str, Any]], n_semanas: int | None = None
                         ) -> dict[str, list[int]]:
-    """Contratados por semana: maior ocupação diária da semana, com sobe-e-desce (ou, nas funções que podem
-    sair e voltar, com reduções de pelo menos `min_semanas_reducao` semanas)."""
+    """Contratados por semana: maior ocupação diária da semana, com sobe-e-desce (uma entrada), com até N entradas
+    ou, nas funções livres, com reduções de pelo menos `min_semanas_reducao` semanas."""
     cal = inst.calendario
     n = n_semanas or semanas_do_cronograma(inst, inst.fim_da_obra(sol))
     uso = ocupacao_diaria(inst, sol)
+    pagas = None
     res = {}
     for f in inst.funcoes:
         serie = [0] * n
@@ -437,8 +547,17 @@ def contratados_minimos(inst: Instancia, sol: Mapping[str, Mapping[str, Any]], n
             s = cal.semana(i)
             if s < n:
                 serie[s] = max(serie[s], q)
-        res[f] = (reducoes_minimas(serie, inst.min_semanas_reducao) if f in inst.transferiveis
-                  else envelope_sobe_desce(serie))
+        e = inst.entradas_de(f)
+        if e == LIVRE:
+            res[f] = reducoes_minimas(serie, inst.min_semanas_reducao)
+        elif e == UMA_ENTRADA:
+            res[f] = envelope_sobe_desce(serie)
+        else:
+            if pagas is None:
+                pagas = [horas_pagas_semana(inst, w) for w in range(n)]
+            ch = inst.custo_hora.get(f, 0.0)
+            res[f] = series_com_entradas(serie, e, inst.min_semanas_reducao, [p * ch for p in pagas],
+                                         inst.custo_movimento(f))
     return res
 
 
@@ -549,10 +668,7 @@ def resumir(inst: Instancia, sol: Mapping[str, Mapping[str, Any]], contratados: 
             homem_semana += c
             total_semana += c
         pico = max(pico, total_semana)
-    for f in inst.transferiveis & set(contratados):
-        if inst.custo_troca:
-            serie = list(contratados[f])
-            custo_mo += inst.custo_troca * sum(abs(b - a) for a, b in zip([0] + serie, serie + [0]))
+    custo_sv, sv_funcao = custo_saida_volta(inst, contratados)
     ociosidade_funcao = []
     for pf in por_funcao.values():
         base = pf["horas_pagas"] - pf["horas_feriado"]
@@ -560,7 +676,9 @@ def resumir(inst: Instancia, sol: Mapping[str, Mapping[str, Any]], contratados: 
         ociosidade_funcao.append({
             **{k: round(v, 2) for k, v in pf.items() if k != "funcao"}, "funcao": pf["funcao"],
             "ociosidade": round(100 * pf["horas_paradas"] / base, 2) if base > 0 else 0.0,
-            "pode_sair_e_voltar": pf["funcao"] in inst.transferiveis,
+            "pode_sair_e_voltar": inst.entradas_de(pf["funcao"]) != UMA_ENTRADA,
+            "entradas_permitidas": inst.entradas_de(pf["funcao"]),
+            "custo_horas_paradas": round(pf["horas_paradas"] * inst.custo_hora.get(pf["funcao"], 0.0), 2),
             "semanas_mais_paradas": [{"semana": w, "horas_paradas": round(h, 1)} for h, w in semanas_top[:5]],
         })
     ociosidade_funcao.sort(key=lambda x: -x["horas_paradas"])
@@ -604,10 +722,13 @@ def resumir(inst: Instancia, sol: Mapping[str, Mapping[str, Any]], contratados: 
         "ociosidade_funcao": ociosidade_funcao,
         "causas_ociosidade": causas,
         "custo_mao_de_obra": round(custo_mo, 2),
+        "custo_saida_volta": round(custo_sv, 2),
+        "saida_volta_funcao": sv_funcao,
         "custo_indiretos": round(custo_ind, 2),
-        "custo_total": round(custo_mo + custo_ind, 2),
+        "custo_total": round(custo_mo + custo_sv + custo_ind, 2),
         "receita_variavel": round(receita, 2),
-        "resultado": round(receita - custo_mo - custo_ind, 2),
+        "resultado": round(receita - custo_mo - custo_sv - custo_ind, 2),
+        "continuidade": relatorio_continuidade(inst, sol, contratados, ocupadas, ociosidade_funcao),
         "indiretos": itens_ind,
         "receitas": itens_rec,
         "atividades": atividades,
@@ -615,6 +736,94 @@ def resumir(inst: Instancia, sol: Mapping[str, Mapping[str, Any]], contratados: 
         "contratados": {f: list(v) for f, v in contratados.items()},
         "caminho_critico": cadeia,
     }
+
+
+# --------------------------------------------------------------------------- continuidade de equipe
+
+
+def _semanas_tarefa(inst: Instancia, a: Mapping[str, Any]) -> tuple[int, int]:
+    cal = inst.calendario
+    return cal.semana(a["inicio"]), cal.semana(a["ultimo"])
+
+
+def relatorio_continuidade(inst: Instancia, sol: Mapping[str, Mapping[str, Any]], contratados: Mapping[str, list[int]],
+                           ocupadas: Mapping[str, list[float]], ociosidade_funcao: list[dict[str, Any]]
+                           ) -> list[dict[str, Any]]:
+    """Por função: entrada e saída, quantas entradas, semanas na obra e sem serviço, horas paradas e quem puxa a
+    entrada (atividade que obriga a entrar mais cedo) e quem segura a saída, com as semanas paradas depois/antes."""
+    cal = inst.calendario
+    ocio = {o["funcao"]: o for o in ociosidade_funcao}
+    usos: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for cod, a in sol.items():
+        t = inst.tarefas[cod]
+        equipe = t.equipe_propria(a["modo"])
+        if not equipe:
+            continue
+        m = t.modos[a["modo"]]
+        w0, w1 = _semanas_tarefa(inst, a)
+        for f, q in equipe.items():
+            h = m.horas.get(f)
+            if not h:
+                h = sum(q * cal.horas_dia(i) for ini, d in (a.get("partes") or [(a["inicio"], a["duracao"])])
+                        for i in range(ini, ini + d))
+            usos[f].append({"codigo": cod, "nome": t.nome, "tipo": t.tipo, "execucao": t.execucao,
+                            "semana_inicio": w0, "semana_fim": w1, "horas": round(h, 1)})
+    linhas = []
+    for f, serie in contratados.items():
+        serie = list(serie)
+        ativas = [w for w, v in enumerate(serie) if v > 0]
+        if not ativas:
+            continue
+        occ = list(ocupadas.get(f) or [])
+        occ += [0.0] * (len(serie) - len(occ))
+        sem_servico = [w for w in ativas if occ[w] < 0.5]
+        lista = sorted(usos.get(f, []), key=lambda u: (u["semana_inicio"], u["semana_fim"]))
+        puxa = segura = None
+        if lista:
+            primeira = min(lista, key=lambda u: (u["semana_inicio"], u["semana_fim"]))
+            w, paradas = primeira["semana_fim"] + 1, 0
+            while w < len(serie) and occ[w] < 0.5:
+                paradas += 1 if serie[w] > 0 else 0
+                w += 1
+            proxima = next((u for u in lista if u["semana_inicio"] == w), None) if w < len(serie) else None
+            puxa = {**primeira, "semanas_paradas_depois": paradas, "seguinte": proxima["codigo"] if proxima else None}
+            ultima = max(lista, key=lambda u: (u["semana_fim"], u["semana_inicio"]))
+            w, paradas = ultima["semana_inicio"] - 1, 0
+            while w >= 0 and occ[w] < 0.5:
+                paradas += 1 if serie[w] > 0 else 0
+                w -= 1
+            anterior = next((u for u in reversed(lista) if u["semana_fim"] == w), None) if w >= 0 else None
+            segura = {**ultima, "semanas_paradas_antes": paradas, "anterior": anterior["codigo"] if anterior else None}
+        o = ocio.get(f) or {}
+        entrada, saida = ativas[0], ativas[-1]
+        textos = []
+        if puxa:
+            t = f"{f} entra na semana {entrada + 1} por causa da {puxa['codigo']} ({_h(puxa['horas'])} h)"
+            if puxa["semanas_paradas_depois"]:
+                t += f" e fica {puxa['semanas_paradas_depois']} semana(s) sem serviço" + \
+                     (f" até a {puxa['seguinte']}" if puxa["seguinte"] else "")
+            textos.append(t + ".")
+        if segura and segura["codigo"] != (puxa or {}).get("codigo"):
+            t = f"Fica até a semana {saida + 1} por causa da {segura['codigo']} ({_h(segura['horas'])} h)"
+            if segura["semanas_paradas_antes"]:
+                t += f", depois de {segura['semanas_paradas_antes']} semana(s) sem serviço" + \
+                     (f" desde a {segura['anterior']}" if segura["anterior"] else "")
+            textos.append(t + ".")
+        linhas.append({
+            "funcao": f, "entrada": cal.segunda(entrada).isoformat(), "saida": cal.segunda(saida).isoformat(),
+            "semana_entrada": entrada + 1, "semana_saida": saida + 1,
+            "entradas": len(periodos_na_obra(serie)), "entradas_permitidas": inst.entradas_de(f),
+            "semanas_na_obra": len(ativas), "semanas_sem_servico": len(sem_servico),
+            "horas_paradas": o.get("horas_paradas", 0.0), "custo_horas_paradas": o.get("custo_horas_paradas", 0.0),
+            "ociosidade": o.get("ociosidade", 0.0),
+            "puxa_entrada": puxa, "segura_saida": segura, "texto": " ".join(textos),
+        })
+    linhas.sort(key=lambda x: -x["custo_horas_paradas"])
+    return linhas
+
+
+def _h(v: float) -> str:
+    return f"{v:.0f}" if abs(v - round(v)) < 0.05 or v >= 10 else f"{v:.1f}".replace(".", ",")
 
 
 # --------------------------------------------------------------------------- verificação
@@ -671,9 +880,14 @@ def verificar(inst: Instancia, sol: Mapping[str, Mapping[str, Any]], contratados
                 erros.append(f"{f}: {q} pessoas em serviço em {cal.data(i)} com {c} contratadas")
                 break
     for f, serie in contratados.items():
-        if f in inst.transferiveis:
+        e = inst.entradas_de(f)
+        if e == LIVRE:
             if not reducao_respeitada(list(serie), inst.min_semanas_reducao):
                 erros.append(f"{f}: redução de menos de {inst.min_semanas_reducao} semanas ({serie})")
+        elif e > UMA_ENTRADA:
+            erro = entradas_respeitadas(list(serie), e, inst.min_semanas_reducao)
+            if erro:
+                erros.append(f"{f}: {erro} ({serie})")
         else:
             desceu = False
             for a, b in zip(serie, serie[1:]):

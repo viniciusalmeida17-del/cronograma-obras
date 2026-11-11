@@ -61,13 +61,18 @@
           <legend>Mão de obra própria: custo real da empresa</legend>
           <div class="acoes-linha">
             <label>Encargos sobre o salário (%) <input type="number" name="encargos" min="0" max="300" step="0.5"></label>
-            <label>Redução mínima de quem sai e volta (semanas) <input type="number" name="min_semanas_reducao" min="1" max="12" step="1"></label>
-            <label>Custo por pessoa que sai ou entra (R$) <input type="number" name="custo_troca" min="0" step="1"></label>
+            <label>Ausência mínima de quem sai e volta (semanas) <input type="number" name="min_semanas_reducao" min="1" max="12" step="1"></label>
+            <label>Custo por pessoa que sai ou volta
+              <span class="custo-troca"><select name="custo_troca_tipo"><option value="horas">horas da própria função</option><option value="reais">valor em R$</option></select>
+              <input type="number" name="custo_troca_horas" min="0" step="1" title="horas por pessoa (padrão 8)">
+              <input type="number" name="custo_troca" min="0" step="1" title="R$ por pessoa"></span></label>
           </div>
           <p class="discreto">Custo por hora = salário × (1 + encargos) ÷ (horas por semana × 4,33). Sem salário, vale o custo das composições da licitação (referência, não o real).
-            "Pode sair e voltar": a função pode ser transferida para outra obra num vale de serviço (padrão: Servente e Pedreiro); as outras só sobem até um pico e depois descem.</p>
+            Entradas na obra: <b>uma entrada</b> = a função sobe até o pico e depois só desce (padrão, a equipe fica sem sair e voltar);
+            <b>até N entradas</b> = pode sair da obra e voltar até N − 1 vezes (obra por etapas ou ambientes), cada ausência com pelo menos a ausência mínima;
+            <b>livre</b> = sai e volta sem limite (padrão de Servente e Pedreiro). Cada pessoa que sai ou volta custa o valor ao lado (padrão: 8 horas da própria função), mostrado à parte no resumo.</p>
           <div class="rolagem"><table class="simples"><thead><tr><th>Função</th><th class="num">Salário mensal (R$)</th><th class="num">Custo por hora</th><th>Origem</th>
-            <th class="num">Composições</th><th>Pode sair e voltar</th><th class="num">Máximo (opcional)</th></tr></thead>
+            <th class="num">Composições</th><th>Entradas na obra</th><th class="num">Máximo (opcional)</th></tr></thead>
             <tbody id="tabela-custos"></tbody></table></div>
         </fieldset>
         <fieldset class="largo">
@@ -169,6 +174,19 @@
         <p class="discreto">Resultado da parte que varia com o prazo, não o lucro total da obra.</p>
       </div>
       <div class="cartao"><h2>As 3 maiores causas de ociosidade</h2><div id="causas"></div></div>
+      <div class="cartao" id="cartao-continuidade"><h2>Continuidade de equipe</h2>
+        <p class="discreto">Quando cada função entra e sai, quantas vezes entra e o que a obriga a entrar cedo ou ficar até tarde.
+          "Procurar melhorias" testa, para as 3 funções com maior custo de horas paradas, tornar a atividade flexível, trocar a função dela,
+          terceirizar e permitir 2 entradas, recalculando o cenário com cada mudança (cerca de <span id="tempo-melhorias">20</span> s por teste).</p>
+        <div class="rolagem"><table class="simples" id="tabela-continuidade"></table></div>
+        <div class="acoes-linha">
+          <button type="button" class="primario" id="btn-melhorias">Procurar melhorias</button>
+          <span id="progresso-melhorias" class="discreto" hidden></span>
+          <span class="espaco"></span>
+        </div>
+        <p id="msg-melhorias" class="mensagem"></p>
+        <div id="melhorias"></div>
+      </div>
       <div class="cartao"><h2>Caminho crítico</h2><p id="caminho-critico"></p></div>
       <div class="cartao"><h2>Indiretos reais (custo)</h2>
         <table class="simples"><thead><tr><th>Item</th><th>Período</th><th class="num">Meses</th><th class="num">R$/mês</th><th class="num">Custo</th></tr></thead>

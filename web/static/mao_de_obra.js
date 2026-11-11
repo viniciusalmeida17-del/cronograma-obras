@@ -182,7 +182,7 @@ function desenharAtividades() {
     const bruto = soma(a.horas_brutas), ajust = soma(a.horas_ajustadas), eq = soma(a.horas_equipamento);
     const pend = !a.duracao || !a.execucao;
     return `<tr class="linha-ativ ${aberta ? "aberta" : ""} ${pend ? "pendente-linha" : ""}" data-codigo="${a.codigo}">
-      <td><span class="seta">${aberta ? "▾" : "▸"}</span> <b>${a.codigo}</b> ${esc(a.nome)}<span class="linha-excel">${a.n_itens} ${a.n_itens === 1 ? "item" : "itens"} · ${esc(a.etapa)}</span></td>
+      <td><span class="seta">${aberta ? "▾" : "▸"}</span> <b>${a.codigo}</b> ${esc(a.nome)}<span class="linha-excel">${a.n_itens} ${a.n_itens === 1 ? "item" : "itens"} · ${esc(a.etapa)}${a.trocas_aplicadas?.length ? ` · <span class="troca" title="${esc(a.trocas_aplicadas.map(textoTroca).join("\n"))}">função trocada</span>` : ""}</span></td>
       <td>${a.execucao ? `<span class="selo-exec ${a.execucao}">${a.execucao === "propria" ? "própria" : "terceirizada"}</span>` : '<span class="falta">escolher</span>'}</td>
       <td>${esc(a.funcao_principal || "—")}</td>
       <td class="num" title="${Object.entries(a.horas_ajustadas).map(([f, h]) => `${f}: ${horas(h)} h`).join("\n")}">${horas(bruto)} → <b>${horas(ajust)}</b></td>
@@ -192,6 +192,27 @@ function desenharAtividades() {
       <td class="col-barra">${barraOrigens(a.horas_por_origem)}</td>
     </tr>${aberta ? detalheAtividade(a, servPorAtiv[a.codigo] || []) : ""}`;
   }).join("");
+}
+
+function textoTroca(t) {
+  return `${t.origem} → ${t.destino}: ${horas(t.horas)} h`;
+}
+
+function formTrocas(a) {
+  const mudou = (a.trocar_funcoes || "") !== (a.trocar_funcoes_biblioteca || "");
+  const aplicadas = a.trocas_aplicadas?.length
+    ? a.trocas_aplicadas.map((t) => `<span class="troca">${esc(textoTroca(t))}</span>`).join(" ")
+    : (a.trocar_funcoes && a.execucao === "terceirizada" ? '<span class="discreto">ignoradas: atividade terceirizada</span>'
+      : '<span class="discreto">nenhuma</span>');
+  return `<form class="form-trocas" data-codigo="${a.codigo}">
+      <label class="largo">Trocar funções <small>(só nesta obra; ex.: Pintor &gt; Servente; Eletricista &gt; Pedreiro — as horas não mudam, só a função)</small>
+        <input name="trocar_funcoes" value="${esc(a.trocar_funcoes || "")}" list="lista-funcoes" autocomplete="off" placeholder="sem troca"></label>
+      <label class="inline"><input type="checkbox" name="salvar_biblioteca"> salvar também na biblioteca padrão</label>
+      <button type="submit" class="secundario">Salvar trocas</button>
+      <p class="discreto">Trocas aplicadas: ${aplicadas}${mudou ? ` · <b>mudada nesta obra</b> (biblioteca: ${esc(a.trocar_funcoes_biblioteca || "sem troca")})` : ""}</p>
+      <p class="mensagem msg-trocas"></p>
+      <datalist id="lista-funcoes">${(est.d.funcoes_empresa || []).map((f) => `<option value="${esc(f)}">`).join("")}</datalist>
+    </form>`;
 }
 
 function detalheAtividade(a, servs) {
@@ -221,6 +242,7 @@ function detalheAtividade(a, servs) {
       <button type="submit" class="primario">Aplicar</button>
       <p class="mensagem msg-ativ"></p>
     </form>
+    ${formTrocas(a)}
     <p class="discreto">Equipe padrão: ${equipe}${maquinas ? `<br>Equipamentos: ${maquinas}` : ""}${c ? `<br>Duração exata ${fmtH.format(c.dias_exatos)} dias (limitada por ${{ equipamento: "equipamento", concretagem: `concretagem: ${fmtH.format(a.volume_m3 || 0)} m³` }[c.limitante] || "mão de obra"})` : ""}${a.duracao_fixa_dias ? `<br>Duração fixa da biblioteca: ${a.duracao_fixa_dias} dias corridos` : ""}</p>
     <table class="servicos"><thead><tr><th>Item</th><th class="desc">Serviço</th><th class="num">Quant.</th><th>Origem</th><th>Horas por função (h/un → total)</th><th></th></tr></thead><tbody>
     ${servs.map(linhaServico).join("")}
@@ -266,6 +288,19 @@ $("#tabela-atividades").addEventListener("click", (e) => {
   desenharAtividades();
 });
 $("#tabela-atividades").addEventListener("submit", (e) => {
+  const ft = e.target.closest(".form-trocas");
+  if (ft) {
+    e.preventDefault();
+    const cod = ft.dataset.codigo;
+    const salvarBib = ft.salvar_biblioteca.checked;
+    if (salvarBib && !confirm(`Gravar as trocas de ${cod} também no Excel da biblioteca padrão? (Uma cópia de segurança será feita antes.)`)) return;
+    chamar(`/api/obras/${obraId}/atividade/${cod}/trocas`, { json: { trocar_funcoes: ft.trocar_funcoes.value, salvar_biblioteca: salvarBib } },
+      $(".msg-trocas", ft), "").then((ok) => {
+      if (ok) mensagem($("#msg-geral"), `${cod}: trocas de função salvas; horas, equipes e duração recalculadas.`
+        + (est.d.backup_biblioteca ? ` Biblioteca padrão gravada (cópia de segurança: ${est.d.backup_biblioteca}).` : ""), "ok");
+    });
+    return;
+  }
   const f = e.target.closest(".form-atividade");
   if (!f) return;
   e.preventDefault();

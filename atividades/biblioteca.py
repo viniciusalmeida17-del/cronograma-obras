@@ -7,7 +7,7 @@ import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import openpyxl
 
@@ -31,7 +31,19 @@ COLUNAS_REGRAS = ("ordem", "prioridade", "atividade", "termos_no_grupo", "termos
 
 _RE_CODIGO = re.compile(r"^[A-Z]+-\d{2,}$")
 _RE_DEPENDENCIA = re.compile(r"^([A-Z]+-\d{2,})(?::(TI|II))?(?:\+(\d+)(DU|D))?$")
-TIPOS_DEPENDENCIA = ("TI", "II")      # término-início, início-início
+TIPOS_DEPENDENCIA = ("TI", "II")
+PRATICA, NORMA = "pratica", "norma"   # prazos de espera da obra (item 6): depende_de ou depende_de_norma
+PRAZOS_ESPERA = (PRATICA, NORMA)
+ABA_LEGENDA = "Legenda"
+# critério de cada tipo (usado se a biblioteca não tiver a aba Legenda)
+CRITERIOS_TIPO = {
+    "rigida": "Tem que começar logo que é liberada (até o limite das rígidas, 5 dias úteis por padrão): segura outro "
+              "serviço ou tem motivo técnico para não esperar.",
+    "flexivel": "Pode ser feita em qualquer semana entre o fim das anteriores e o início das que dependem dela (ou antes "
+                "da limpeza final). O cronograma encaixa nas semanas com menos serviço.",
+    "aguardar": "Espera sem equipe (cura, testes).",
+    "indireta": "Custo por tempo ou taxa, sem equipe de produção.",
+}      # término-início, início-início
 UNIDADES_ESPERA = ("d", "du")         # dias corridos, dias úteis
 DIAS_UTEIS_POR_CORRIDO = 5 / 7        # conversão sem calendário (herança na etapa 3)
 
@@ -85,6 +97,16 @@ class Atividade:
     equipe_max: int = 20
     duracao_fixa_dias: int | None = None
     tipo_producao: str | None = None   # etapa 5.1: "concretagem" limita a duração pelos caminhões de concreto
+    # item 6 (colunas opcionais)
+    trocar_funcoes: list[tuple[str, str]] = field(default_factory=list)   # (origem, destino) mantendo as horas
+    fonte: str | None = None                                              # só informativa
+    depende_de_norma: list[Dependencia] | None = None                     # None = igual ao depende_de
+
+    def dependencias(self, prazos: str = PRATICA) -> list[Dependencia]:
+        """depende_de da opção de prazos de espera (norma só onde a coluna depende_de_norma estiver preenchida)."""
+        if prazos == NORMA and self.depende_de_norma is not None:
+            return self.depende_de_norma
+        return self.depende_de
 
     def como_dict(self) -> dict[str, Any]:
         return {
@@ -98,6 +120,8 @@ class Atividade:
             "tipo": self.tipo, "equipe_principal": self.equipe_principal, "observacao": self.observacao,
             "periodo_de": self.periodo_de, "periodo_ate": self.periodo_ate,
             "linha_excel": self.linha_excel, "ordem": self.ordem,
+            "trocar_funcoes": formatar_trocas(self.trocar_funcoes), "fonte": self.fonte,
+            "depende_de_norma": formatar_dependencias(self.depende_de_norma) if self.depende_de_norma is not None else None,
         }
 
 
@@ -118,6 +142,7 @@ class Biblioteca:
     regras: list[Regra]
     caminho: str | None = None
     codigos_com_regra: set[str] = field(default_factory=set)
+    legenda: dict[str, str] = field(default_factory=dict)   # aba Legenda: chave -> texto (critério dos tipos)
 
     def __post_init__(self):
         self.codigos_com_regra = {r.atividade for r in self.regras}
@@ -167,6 +192,61 @@ def formatar_dependencias(deps: list[Dependencia]) -> str:
     return ", ".join(str(d) for d in deps)
 
 
+def interpretar_trocas(texto: Any, funcoes: Iterable[str] | None = None) -> tuple[list[tuple[str, str]], list[str]]:
+    """'Pintor > Servente; Eletricista > Pedreiro' -> [("Pintor", "Servente"), ("Eletricista", "Pedreiro")].
+
+    Compara sem acento, sem diferenciar maiúsculas e ignorando espaços extras. Com `funcoes` (as funções da
+    funcoes.xlsx), os nomes viram os da tabela e uma função que não existe gera erro.
+    """
+    trocas: list[tuple[str, str]] = []
+    erros: list[str] = []
+    if texto is None or not str(texto).strip():
+        return trocas, erros
+    nomes = {normalizar(f): f for f in funcoes} if funcoes is not None else None
+    for parte in str(texto).split(";"):
+        if not parte.strip():
+            continue
+        lados = parte.split(">")
+        if len(lados) != 2 or not lados[0].strip() or not lados[1].strip():
+            erros.append(f"troca '{parte.strip()}' em formato inválido (use 'Função de origem > Função de destino', "
+                         "separadas por ponto e vírgula)")
+            continue
+        par = []
+        for lado in lados:
+            nome = re.sub(r"\s+", " ", lado).strip()
+            if nomes is not None:
+                if normalizar(nome) not in nomes:
+                    erros.append(f"função '{nome}' (em '{parte.strip()}') não existe na tabela de funções (funcoes.xlsx)")
+                    par = []
+                    break
+                nome = nomes[normalizar(nome)]
+            par.append(nome)
+        if not par:
+            continue
+        origem, destino = par
+        if normalizar(origem) == normalizar(destino):
+            erros.append(f"troca '{parte.strip()}': origem e destino são a mesma função")
+        elif any(normalizar(o) == normalizar(origem) for o, _ in trocas):
+            erros.append(f"a função {origem} aparece duas vezes como origem")
+        else:
+            trocas.append((origem, destino))
+    return trocas, erros
+
+
+def formatar_trocas(trocas: Iterable[tuple[str, str]] | None) -> str:
+    return "; ".join(f"{o} > {d}" for o, d in (trocas or []))
+
+
+def _funcoes_da_empresa() -> list[str] | None:
+    """Funções da funcoes.xlsx (para validar trocar_funcoes). None se a tabela não abrir (o erro aparece na etapa 4)."""
+    try:
+        from mao_de_obra.funcoes import carregar_funcoes
+
+        return carregar_funcoes().funcoes()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _termos(valor: Any) -> list[str]:
     if valor is None:
         return []
@@ -194,9 +274,18 @@ def _cabecalho(ws) -> dict[str, int]:
     return {normalizar(v).lower(): i for i, v in enumerate(primeira) if v is not None}
 
 
-def carregar_biblioteca(caminho: str | os.PathLike | None = None) -> Biblioteca:
-    """Lê e valida a biblioteca. Lança ErroBiblioteca com todos os erros encontrados."""
+_NAO_INFORMADO = object()
+
+
+def carregar_biblioteca(caminho: str | os.PathLike | None = None, funcoes: Any = _NAO_INFORMADO) -> Biblioteca:
+    """Lê e valida a biblioteca. Lança ErroBiblioteca com todos os erros encontrados.
+
+    `funcoes`: nomes das funções da empresa para validar `trocar_funcoes` (padrão: lidos da funcoes.xlsx;
+    None = não valida os nomes).
+    """
     caminho = Path(caminho or caminho_biblioteca())
+    if funcoes is _NAO_INFORMADO:
+        funcoes = _funcoes_da_empresa()
     try:
         wb = openpyxl.load_workbook(caminho, data_only=True, read_only=True)
     except FileNotFoundError:
@@ -210,18 +299,27 @@ def carregar_biblioteca(caminho: str | os.PathLike | None = None) -> Biblioteca:
                 erros.append({"aba": aba, "linha": None, "mensagem": f"Aba '{aba}' não encontrada."})
         if erros:
             raise ErroBiblioteca(erros)
-        atividades = _ler_atividades(wb[ABA_ATIVIDADES], erros)
+        atividades = _ler_atividades(wb[ABA_ATIVIDADES], erros, funcoes)
         regras = _ler_regras(wb[ABA_REGRAS], erros)
+        legenda = _ler_legenda(wb[ABA_LEGENDA]) if ABA_LEGENDA in wb.sheetnames else {}
     finally:
         wb.close()
 
     _validar(atividades, regras, erros)
     if erros:
         raise ErroBiblioteca(erros)
-    return Biblioteca(atividades=atividades, regras=regras, caminho=str(caminho))
+    return Biblioteca(atividades=atividades, regras=regras, caminho=str(caminho), legenda=legenda)
 
 
-def _ler_atividades(ws, erros) -> dict[str, Atividade]:
+def _ler_legenda(ws) -> dict[str, str]:
+    legenda = {}
+    for linha in ws.iter_rows(values_only=True):
+        if len(linha) >= 2 and linha[0] and linha[1]:
+            legenda[str(linha[0]).strip().lower()] = str(linha[1]).strip()
+    return legenda
+
+
+def _ler_atividades(ws, erros, funcoes: list[str] | None = None) -> dict[str, Atividade]:
     cab = _cabecalho(ws)
     faltando = [c for c in COLUNAS_ATIVIDADES if c not in cab]
     if faltando:
@@ -243,10 +341,19 @@ def _ler_atividades(ws, erros) -> dict[str, Atividade]:
         deps, erros_dep = interpretar_dependencias(val("depende_de"))
         for e in erros_dep:
             erros.append({"aba": ABA_ATIVIDADES, "linha": n, "mensagem": f"{codigo}: {e}."})
+        opcional = lambda c: linha[cab[c]] if c in cab and cab[c] < len(linha) else None  # noqa: E731
+        deps_norma = None
+        if _texto(opcional("depende_de_norma")):
+            deps_norma, erros_dep = interpretar_dependencias(opcional("depende_de_norma"))
+            for e in erros_dep:
+                erros.append({"aba": ABA_ATIVIDADES, "linha": n, "mensagem": f"{codigo}: depende_de_norma: {e}."})
+        trocas, erros_trocas = interpretar_trocas(opcional("trocar_funcoes"), funcoes)
+        for e in erros_trocas:
+            erros.append({"aba": ABA_ATIVIDADES, "linha": n,
+                          "mensagem": f"{codigo}: trocar_funcoes '{_texto(opcional('trocar_funcoes'))}': {e}."})
         tipo = (_texto(val("tipo")) or "").lower()
         if tipo not in TIPOS:
             erros.append({"aba": ABA_ATIVIDADES, "linha": n, "mensagem": f"{codigo}: tipo '{tipo or '(vazio)'}' inválido (use {', '.join(TIPOS)})."})
-        opcional = lambda c: linha[cab[c]] if c in cab and cab[c] < len(linha) else None  # noqa: E731
         execucao = (_texto(opcional("execucao_padrao")) or "propria").lower()
         execucao = {"própria": "propria"}.get(execucao, execucao)
         if execucao not in EXECUCOES_PADRAO:
@@ -279,6 +386,7 @@ def _ler_atividades(ws, erros) -> dict[str, Atividade]:
             periodo_ate=(_texto(val("periodo_ate")) or "").upper() or None,
             linha_excel=n, ordem=len(atividades),
             execucao_padrao=execucao, tipo_producao=tipo_producao, **numeros,
+            trocar_funcoes=trocas, fonte=_texto(opcional("fonte")), depende_de_norma=deps_norma,
         )
     return atividades
 
@@ -322,11 +430,14 @@ def _ler_regras(ws, erros) -> list[Regra]:
 
 def _validar(atividades: dict[str, Atividade], regras: list[Regra], erros: list[dict[str, Any]]) -> None:
     for a in atividades.values():
-        for d in a.depende_de:
-            if d.codigo not in atividades:
-                erros.append({"aba": ABA_ATIVIDADES, "linha": a.linha_excel, "mensagem": f"{a.codigo} depende de {d.codigo}, que não existe."})
-            elif d.codigo == a.codigo:
-                erros.append({"aba": ABA_ATIVIDADES, "linha": a.linha_excel, "mensagem": f"{a.codigo} depende dela mesma."})
+        for coluna, deps in (("", a.depende_de), (" (depende_de_norma)", a.depende_de_norma or [])):
+            for d in deps:
+                if d.codigo not in atividades:
+                    erros.append({"aba": ABA_ATIVIDADES, "linha": a.linha_excel, "mensagem": f"{a.codigo} depende de {d.codigo}{coluna}, que não existe."})
+                elif d.codigo == a.codigo:
+                    erros.append({"aba": ABA_ATIVIDADES, "linha": a.linha_excel, "mensagem": f"{a.codigo} depende dela mesma{coluna}."})
+        if a.tipo == "indireta" and a.depende_de_norma:
+            erros.append({"aba": ABA_ATIVIDADES, "linha": a.linha_excel, "mensagem": f"{a.codigo}: atividade indireta não entra na sequência; deixe depende_de_norma vazio."})
         for campo in ("periodo_de", "periodo_ate"):
             p = getattr(a, campo)
             if p and p not in PERIODOS_ESPECIAIS and p not in atividades:
@@ -336,19 +447,22 @@ def _validar(atividades: dict[str, Atividade], regras: list[Regra], erros: list[
     for r in regras:
         if r.atividade not in atividades:
             erros.append({"aba": ABA_REGRAS, "linha": r.linha_excel, "mensagem": f"Regra {r.ordem} aponta para a atividade {r.atividade}, que não existe."})
-    ciclo = achar_ciclo({c: [d.codigo for d in a.depende_de] for c, a in atividades.items()})
-    if ciclo:
-        linhas = sorted({atividades[c].linha_excel for c in ciclo})
-        erros.append({"aba": ABA_ATIVIDADES, "linha": linhas[0], "mensagem": "Ciclo nas dependências: " + " → ".join(ciclo) + f" (cada uma depende da seguinte; linhas {', '.join(map(str, linhas))})."})
+    for prazos, rotulo in ((PRATICA, ""), (NORMA, " com os prazos de norma")):
+        ciclo = achar_ciclo({c: [d.codigo for d in a.dependencias(prazos)] for c, a in atividades.items()})
+        if ciclo:
+            linhas = sorted({atividades[c].linha_excel for c in ciclo})
+            erros.append({"aba": ABA_ATIVIDADES, "linha": linhas[0], "mensagem": f"Ciclo nas dependências{rotulo}: " + " → ".join(ciclo) + f" (cada uma depende da seguinte; linhas {', '.join(map(str, linhas))})."})
+            break
 
 
 # --------------------------------------------------------------------------- gravação
 
 
 def salvar_atividade_na_biblioteca(
-    codigo: str, tipo: str, depende_de: list[Dependencia] | None, caminho: str | os.PathLike | None = None
+    codigo: str, tipo: str | None, depende_de: list[Dependencia] | None, caminho: str | os.PathLike | None = None,
+    trocar_funcoes: list[tuple[str, str]] | None = None,
 ) -> Path:
-    """Grava tipo e depende_de de uma atividade no Excel da biblioteca (depende_de=None mantém o atual).
+    """Grava tipo, depende_de e trocar_funcoes de uma atividade no Excel da biblioteca (None mantém o atual).
 
     Antes, valida a biblioteca resultante (ciclo, códigos) e faz uma cópia de segurança.
     Retorna o caminho da cópia de segurança.
@@ -358,9 +472,10 @@ def salvar_atividade_na_biblioteca(
     codigo = codigo.upper()
     if codigo not in biblioteca.atividades:
         raise ErroBiblioteca([{"aba": ABA_ATIVIDADES, "linha": None, "mensagem": f"Atividade {codigo} não existe na biblioteca."}])
+    atividade = biblioteca.atividades[codigo]
+    tipo = tipo or atividade.tipo
     if tipo not in TIPOS:
         raise ErroBiblioteca([{"aba": ABA_ATIVIDADES, "linha": None, "mensagem": f"Tipo '{tipo}' inválido."}])
-    atividade = biblioteca.atividades[codigo]
     atividade.tipo = tipo
     if depende_de is not None:
         atividade.depende_de = list(depende_de)
@@ -381,5 +496,10 @@ def salvar_atividade_na_biblioteca(
     ws.cell(linha, cab["tipo"] + 1).value = tipo
     if depende_de is not None:
         ws.cell(linha, cab["depende_de"] + 1).value = formatar_dependencias(depende_de) or None
+    if trocar_funcoes is not None:
+        if "trocar_funcoes" not in cab:   # biblioteca antiga: cria a coluna no fim
+            cab["trocar_funcoes"] = ws.max_column
+            ws.cell(1, ws.max_column + 1).value = "trocar_funcoes"
+        ws.cell(linha, cab["trocar_funcoes"] + 1).value = formatar_trocas(trocar_funcoes) or None
     wb.save(caminho)
     return backup

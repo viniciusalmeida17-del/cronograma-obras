@@ -90,7 +90,7 @@ a pasta `arquivos_obras/` fica ao lado do banco),
 | `  validacao.py` | Total geral (tolerância R$ 1,00), total por grupo e quantidade × preço (R$ 0,05). |
 | `  leitor.py` | Escolha da aba, classificação das linhas, hierarquia pelo prefixo do item. |
 | `atividades/` | Etapa 3, também sem dependência da interface. |
-| `  biblioteca.py` | Lê e valida o Excel da biblioteca (códigos, `depende_de`, tipos, períodos, regras, ciclos); grava alterações com cópia de segurança em `dados/backup/`. |
+| `  biblioteca.py` | Lê e valida o Excel da biblioteca (códigos, `depende_de`, `depende_de_norma`, `trocar_funcoes`, tipos, períodos, regras, ciclos); grava alterações com cópia de segurança em `dados/backup/`. |
 | `  reconhecimento.py` | Liga serviços às atividades: memória → regras (prioridade, profundidade do grupo) → `ambiguo` / `sem_regra`. |
 | `  rede.py` | Atividades da obra, herança de dependências (com soma das esperas), ligação à LIM-01, ordem topológica, edição por obra. |
 | `  obra.py` | Aplica a etapa 3 a uma obra gravada no banco (usado pela tela e pelos testes). |
@@ -103,7 +103,7 @@ a pasta `arquivos_obras/` fica ao lado do banco),
 | `cronograma/` | Etapa 5, sem dependência da interface. |
 | `  calendario.py` | Dias úteis (5 ou 6 por semana), feriados nacionais fixos e móveis (Páscoa), feriados locais, jornada por semana. |
 | `  modelo.py` | Tarefas e modos (1 até `equipe_max` da função principal; as outras na proporção; modos sem ganho de prazo são retirados). |
-| `  agenda.py` | Solução inicial (busca local), caminho crítico, folgas, equipe por semana, custos e a verificação de todas as restrições. |
+| `  agenda.py` | Solução inicial (busca local), caminho crítico, folgas, equipe por semana (uma entrada, até N entradas ou livre), custo de saída e volta, relatório de continuidade, custos e a verificação de todas as restrições. |
 | `  otimizador.py` | Modelo CP-SAT: início e modo de cada atividade, contratados por função e semana, sobe-e-desce, prazo, máximos. |
 | `  obra.py` | Aplica a etapa 5 a uma obra do banco: parâmetros, custos por hora, indiretos por tempo, cenários, comparação, Excel. |
 | `  sinapi.py` | (em `mao_de_obra/`) Importa a tabela analítica do SINAPI para o banco de coeficientes. |
@@ -225,7 +225,7 @@ a pasta `arquivos_obras/` fica ao lado do banco),
 - **Dependências** (`depende_de`): `CÓDIGO[:TIPO][+ESPERA]`. `TI` término-início (padrão) ou `II` início-início;
   `+Nd` dias corridos, `+Ndu` dias úteis. `A:II+N`: B começa N depois do início de A e **não termina antes** do
   término de A + N. Formato antigo (`FUN-04+3d`) continua aceito. Na herança, fica o tipo do elo de quem fica e as
-  esperas somam (unidades diferentes → dias úteis, 7 corridos ≈ 5 úteis). EST-03 = 28 dias corridos; só a REV-01 espera a cura.
+  esperas somam (unidades diferentes → dias úteis, 7 corridos ≈ 5 úteis). EST-03 = 21 dias corridos (item 6); só a REV-01 espera a cura.
 - **Concretagem** (`tipo_producao = concretagem`): duração ≥ teto(m³ da atividade ÷ (m³ por caminhão × caminhões por dia));
   parâmetros da obra (padrão 8 m³ e 3 caminhões).
 - **Equipes e máquinas**: `equipe_max` vazio = 20; o otimizador testa 1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20. Máquinas de cada
@@ -245,9 +245,55 @@ a pasta `arquivos_obras/` fica ao lado do banco),
   terceirizados (padrões lembrados para a próxima obra; enquanto não preencher, aviso "referência da licitação").
   Critério de pagamento das indiretas: proporcional (padrão), mensal ou fixo. A tabela mostra receita e custo que
   variam com o prazo, o **resultado** e a diferença para o principal (só a parte que varia com o prazo).
-- **Ociosidade**: sem contar feriados (coluna à parte), total e por função, com as 3 maiores causas. Funções que
-  **podem sair e voltar** (padrão Servente e Pedreiro) não seguem o sobe-e-desce, mas cada redução dura ≥ 2 semanas.
+- **Ociosidade**: sem contar feriados (coluna à parte), total e por função, com as 3 maiores causas. Entradas na obra
+  por função: veja o item 6.
   Terceirizadas podem ser feitas em até 3 partes de ≥ 5 dias úteis.
 - **Gantt**: escala dia/semana/mês, etapas que abrem e fecham (barra-resumo), linhas de hoje e da data limite, setas de
   dependência (II tracejada), só o caminho crítico, terceirizadas em partes.
 - **Leitor**: planilha só com preços com BDI é aceita; os sem BDI são calculados pelo BDI (um aviso só).
+
+## Item 6 — regras do cronograma
+
+Especificação em `ITEM_6_REGRAS_DO_CRONOGRAMA.md`. As obras salvas antes continuam com a própria cópia das atividades;
+a biblioteca nova vale para as próximas importações (o banco ganha as colunas novas sozinho).
+
+- **Biblioteca** (`dados/biblioteca_atividades.xlsx`, 19 colunas, lidas pelo nome do cabeçalho; uma biblioteca sem as
+  colunas novas continua valendo):
+  - 9 atividades passaram a **flexíveis** (ELE-05, ELE-06, HID-05, ESQ-02, PIN-03, EST-04, QUA-04, URB-02, ACA-01).
+    Critério: rígida = segura outro serviço ou tem motivo técnico para não esperar; flexível = não libera nenhum
+    serviço (ou só um bem adiante) e o otimizador encaixa nas semanas com menos serviço; aguardar = espera sem equipe.
+  - EST-03 (retirada das escoras) com **21 dias**; FUN-05 com `FUN-04:II+3d` (fôrmas laterais, dias corridos).
+  - `fonte`: origem do tipo e das esperas (`[Norma]`, `[Caderno]`, `[Fabricante]`, `[Planejamento]`, `[Prática]`).
+    Só informativa: aparece ao passar o mouse na tela de sequência, com o critério do tipo (aba Legenda).
+  - `depende_de_norma`: esperas de norma (NBR 7200, 13753, 13755, SUDECAP) na REV-01, REV-02, REV-03, PIS-02,
+    PIN-01 e PIN-04. Ciclo nas dependências de norma também é erro da biblioteca.
+  - `trocar_funcoes`: `Função de origem > Função de destino; …` (sem acento, maiúsculas ou espaços extras). As duas
+    têm que ser funções da `funcoes.xlsx`; senão a biblioteca mostra o erro com a atividade e o texto.
+- **Prazos de espera** (tela de Sequência, por obra): **Prática** (padrão, `depende_de`) ou **Norma** (usa
+  `depende_de_norma` onde houver). As dependências das duas opções (com a herança) ficam guardadas ao montar a rede;
+  trocar a opção troca só essas atividades (marcadas "norma"), valida ciclo e grava. Uma atividade com `depende_de`
+  editado nesta obra fica igual nas duas opções. Com Norma a obra pode ficar mais longa (REV-02 espera a COB-02);
+  se não couber no prazo, aparece o diagnóstico.
+- **Trocar função por atividade**: ordem do cálculo de horas = composição → `funcoes.xlsx` → `trocar_funcoes` →
+  juntar funções → equipes e duração. As horas não mudam, só a função (somam se o destino já existe); se a função
+  principal for trocada, a de destino vira a principal. Só em atividade **própria** (terceirizada ignora). PRE-01 e
+  PRE-02 já vêm com as trocas de eletricista, bombeiro e pintor para pedreiro e servente. Na tela de mão de obra
+  (detalhe da atividade) aparecem as trocas aplicadas ("Pintor → Servente: 245 h") e dá para mudar só nesta obra,
+  com "salvar também na biblioteca padrão" (cópia de segurança antes). A tela de sequência mostra a coluna "Trocas de função".
+- **Entradas na obra** (parâmetros do cronograma, por função; substitui "pode sair e voltar"):
+  **uma entrada** (padrão, menos Servente e Pedreiro) = sobe até o pico e depois só desce;
+  **até N entradas** = sai e volta até N − 1 vezes, sobe-e-desce dentro de cada entrada, cada ausência com pelo menos
+  a ausência mínima (padrão 2 semanas); **livre** (padrão Servente e Pedreiro) = sai e volta sem limite.
+  Obras com a opção antiga: ligada = livre, desligada = uma entrada.
+- **Custo de saída e volta**: padrão **8 horas da própria função** por pessoa que sai ou volta (ou um valor em R$, ou zero).
+  Conta as pessoas que saem e voltam (aumentos além do pico), 2 movimentos cada; é zero quando ninguém sai. Entra no
+  custo real do cenário como linha separada ("Custo de saída e volta de equipe").
+- **Continuidade de equipe** (Resumo do cenário): por função, entrada e saída, quantas entradas, semanas na obra, semanas
+  sem serviço, horas e custo parados, **quem puxa a entrada** e **quem segura a saída** (ex.: "Eletricista entra na
+  semana 3 por causa da ELE-01 (24 h) e fica 9 semanas sem serviço até a ELE-02").
+- **Procurar melhorias** (botão no Resumo, em segundo plano): para as 3 funções com maior custo de horas paradas, testa
+  na atividade que puxa a entrada ou segura a saída tornar flexível (se rígida), trocar a função (ex.: `Eletricista >
+  Pedreiro`, só sugestão), terceirizar (se a execução é "perguntar"; conta o terceirizado com a mesma mão de obra) e
+  permitir 2 entradas (Operador/Motorista não é trocado: vem com a máquina; a LIM-01 não vira flexível). O cenário é
+  recalculado com o mesmo tempo (base justa) e cada teste parte desse cronograma, só com aquela mudança (20 s cada). Mostra só as que melhoram,
+  pelo ganho em R$ e em pontos de ociosidade, com **Aplicar nesta obra** (grava e recalcula o cenário).

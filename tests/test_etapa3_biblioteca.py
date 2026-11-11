@@ -17,9 +17,9 @@ def test_biblioteca_padrao_carrega(biblioteca):
     assert len(biblioteca.regras) == 89
     assert "TOTAL" not in biblioteca.atividades
     fun05 = biblioteca.atividades["FUN-05"]
-    assert fun05.depende_de == [Dependencia("FUN-04", 3, "II", "du")]
+    assert fun05.depende_de == [Dependencia("FUN-04", 3, "II", "d")]   # item 6: +3 dias corridos (fôrmas laterais)
     assert biblioteca.atividades["QUA-03"].depende_de[0] == Dependencia("QUA-02", 28)
-    assert biblioteca.atividades["EST-03"].duracao_fixa_dias == 28
+    assert biblioteca.atividades["EST-03"].duracao_fixa_dias == 21   # item 6: retirada das escoras aos 21 dias
     assert biblioteca.atividades["FUN-04"].tipo_producao == "concretagem"
     assert biblioteca.atividades["PRE-01"].equipe_max == 20  # vazio = 20
     assert fun05.tipo == "rigida"

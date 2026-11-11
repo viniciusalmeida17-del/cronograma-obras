@@ -127,12 +127,15 @@ function desenharParametros() {
   f.encargos.value = p.encargos;
   f.min_semanas_reducao.value = p.min_semanas_reducao ?? 2;
   f.custo_troca.value = p.custo_troca ?? 0;
+  f.custo_troca_horas.value = p.custo_troca_horas ?? 8;
+  f.custo_troca_tipo.value = p.custo_troca_tipo || "horas";
+  mostrarCustoTroca();
   $("#info-dias").textContent = p.dias_semana === 6 ? "6 (com sábado)" : "5 (segunda a sexta)";
   $("#info-jornada").textContent = `${fmt1.format(p.horas_semana)} h/semana` + (p.mudancas_jornada || [])
     .map((m) => `, ${fmt1.format(m.horas_semana)} h a partir de ${dataBR(m.a_partir_de)}`).join("");
   $("#lista-feriados").innerHTML = "";
   (p.feriados_locais || []).forEach(linhaFeriado);
-  const transf = new Set(p.transferiveis || []);
+  const entradas = p.entradas || {};
   $("#tabela-custos").innerHTML = p.funcoes.map((fn) => {
     const c = p.custos[fn] || {};
     const sal = (p.salarios || {})[fn] ?? "";
@@ -141,7 +144,7 @@ function desenharParametros() {
       <td class="num ${c.referencia ? "referencia-valor" : ""}">${c.custo_hora ? reais(c.custo_hora) : "—"}</td>
       <td class="discreto">${ORIGEM_CUSTO[c.origem] || ""}</td>
       <td class="num discreto">${c.composicoes ? reais(c.composicoes) : "—"}</td>
-      <td><label class="inline"><input type="checkbox" name="transferivel" data-funcao="${esc(fn)}" ${transf.has(fn) ? "checked" : ""}> sim</label></td>
+      <td><select name="entradas" data-funcao="${esc(fn)}">${OPCOES_ENTRADAS.map(([v, t]) => `<option value="${v}" ${Number(entradas[fn] ?? 1) === v ? "selected" : ""}>${t}</option>`).join("")}</select></td>
       <td class="num"><input type="number" name="maximo" data-funcao="${esc(fn)}" min="1" step="1" value="${p.max_por_funcao[fn] ?? ""}" placeholder="—"></td></tr>`;
   }).join("") || `<tr><td colspan="7" class="discreto">Nenhuma atividade própria com horas.</td></tr>`;
   $("#tabela-indiretos-reais").innerHTML = "";
@@ -169,6 +172,17 @@ function desenharParametros() {
   fc.prazos.value = (p.prazos || []).map((x) => fmt2.format(x)).join("; ");
   fc.tempo_limite.value = p.tempo_limite;
 }
+
+const OPCOES_ENTRADAS = [[1, "uma entrada"], [2, "até 2 entradas"], [3, "até 3 entradas"], [4, "até 4 entradas"], [0, "livre"]];
+const textoEntradas = (n) => (n === 0 ? "livre" : n === 1 ? "uma" : `até ${n}`);
+
+function mostrarCustoTroca() {
+  const f = $("#form-parametros");
+  const horas = f.custo_troca_tipo.value === "horas";
+  f.custo_troca_horas.hidden = !horas;
+  f.custo_troca.hidden = horas;
+}
+$("#form-parametros [name=custo_troca_tipo]").addEventListener("change", mostrarCustoTroca);
 
 $("#btn-add-feriado").addEventListener("click", () => linhaFeriado());
 $("#btn-add-indireto").addEventListener("click", () => { linhaIndireto(); est.indiretosMudados = true; });
@@ -201,7 +215,8 @@ $("#form-parametros").addEventListener("submit", async (e) => {
     maquinas_max: f.maquinas_max.value, dividir_terceirizadas: f.dividir_terceirizadas.checked,
     encargos: f.encargos.value, min_semanas_reducao: f.min_semanas_reducao.value, custo_troca: f.custo_troca.value,
     salarios, terceirizados: terc, criterios,
-    transferiveis: $$("input[name=transferivel]", f).filter((i) => i.checked).map((i) => i.dataset.funcao),
+    custo_troca_tipo: f.custo_troca_tipo.value, custo_troca_horas: f.custo_troca_horas.value,
+    entradas: Object.fromEntries($$("select[name=entradas]", f).map((s) => [s.dataset.funcao, Number(s.value)])),
   };
   if (est.indiretosMudados) {
     corpo.indiretos_reais = $$("#tabela-indiretos-reais tr").map((tr) => ({
@@ -337,10 +352,17 @@ $("#form-calcular").addEventListener("submit", (e) => { e.preventDefault(); mens
 $("#btn-parar").addEventListener("click", () => api(`/api/obras/${obraId}/cronograma/parar`, { method: "POST" }).catch(() => {}));
 
 function mostrarProgresso(st) {
-  $("#progresso").hidden = !st.rodando;
+  const melhorias = st.tipo === "melhorias";
+  $("#progresso").hidden = !st.rodando || melhorias;
   $("#btn-parar").hidden = !st.rodando;
   $("#btn-calcular").disabled = !!st.rodando;
+  $("#btn-melhorias").disabled = !!st.rodando;
+  $("#progresso-melhorias").hidden = !(st.rodando && melhorias);
   if (!st.rodando) return;
+  if (melhorias) {
+    $("#progresso-melhorias").textContent = `Testando a alternativa ${st.cenario + 1} de ${st.n} (até ${st.tempo_limite} s cada)…`;
+    return;
+  }
   $("#progresso-barra").style.width = Math.round(100 * (st.progresso || 0)) + "%";
   $("#progresso-texto").textContent = `Cenário ${st.cenario + 1} de ${st.n}` + (st.prazo ? ` (${fmt2.format(st.prazo)} meses)` : "")
     + ` · ${st.solucoes || 0} solução(ões) encontrada(s)` + (st.melhor ? ` · melhor custo ${reais(st.melhor)}` : "")
@@ -353,7 +375,12 @@ async function acompanhar() {
   try { st = await api(`/api/obras/${obraId}/cronograma/calculo`); } catch { return; }
   mostrarProgresso(st);
   if (st.rodando) { est.timer = setTimeout(acompanhar, 1000); return; }
-  if (st.erro) mensagem($("#msg-cenarios"), st.erro, "erro");
+  if (st.erro) mensagem($(st.tipo === "melhorias" ? "#msg-melhorias" : "#msg-cenarios"), st.erro, "erro");
+  if (st.tipo === "melhorias") {
+    if (est.cenId) await escolherVisualizado(est.cenId);
+    if (!st.erro) mensagem($("#msg-melhorias"), "Busca de melhorias concluída.", "ok");
+    return;
+  }
   const antes = JSON.stringify(est.cmp);
   est.cmp = await api(`/api/obras/${obraId}/cenarios`);
   if (antes !== JSON.stringify(est.cmp)) {
@@ -605,9 +632,9 @@ function desenharEquipe() {
   }
   alvo.innerHTML = svg + "</svg>";
 
-  $("#tabela-ociosidade").innerHTML = `<thead><tr><th>Função</th><th>Pode sair e voltar</th><th class="num">Horas pagas</th><th class="num">Em feriado</th>
+  $("#tabela-ociosidade").innerHTML = `<thead><tr><th>Função</th><th>Entradas na obra</th><th class="num">Horas pagas</th><th class="num">Em feriado</th>
     <th class="num">Ocupadas</th><th class="num">Paradas</th><th class="num">Ociosidade</th></tr></thead><tbody>
-    ${(c.ociosidade_funcao || []).map((f) => `<tr><td>${esc(f.funcao)}</td><td>${f.pode_sair_e_voltar ? "sim" : ""}</td>
+    ${(c.ociosidade_funcao || []).map((f) => `<tr><td>${esc(f.funcao)}</td><td>${textoEntradas(f.entradas_permitidas ?? (f.pode_sair_e_voltar ? 0 : 1))}</td>
       <td class="num">${fmt1.format(f.horas_pagas)}</td><td class="num">${fmt1.format(f.horas_feriado)}</td><td class="num">${fmt1.format(f.horas_ocupadas)}</td>
       <td class="num">${fmt1.format(f.horas_paradas)}</td><td class="num"><b>${fmt1.format(f.ociosidade)}%</b></td></tr>`).join("")}
     <tr class="total"><td>Total</td><td></td><td class="num">${fmt1.format(c.horas_pagas || 0)}</td><td class="num">${fmt1.format(c.horas_feriado || 0)}</td>
@@ -638,7 +665,7 @@ function desenharResumo() {
   const c = est.cen;
   if (!c) {
     $("#numeros-resumo").innerHTML = SEM_CENARIO;
-    ["#caminho-critico", "#tabela-indiretos", "#tabela-receitas", "#causas"].forEach((s) => { $(s).innerHTML = ""; });
+    ["#caminho-critico", "#tabela-indiretos", "#tabela-receitas", "#causas", "#tabela-continuidade", "#melhorias"].forEach((s) => { $(s).innerHTML = ""; });
     return;
   }
   const caixas = [
@@ -649,6 +676,7 @@ function desenharResumo() {
     ["Homem-semana pago", fmt1.format(c.homem_semana)],
     ["Ociosidade (sem feriados)", fmt1.format(c.ociosidade) + "%"],
     ["Mão de obra própria", reais(c.custo_mao_de_obra)],
+    ["Custo de saída e volta de equipe", reais(c.custo_saida_volta || 0)],
     ["Indiretos reais por tempo", reais(c.custo_indiretos)],
     ["Receita que varia com o prazo", reais(c.receita_variavel || 0)],
     ["Resultado (parte variável)", reais(c.resultado)],
@@ -660,9 +688,79 @@ function desenharResumo() {
     ? `<ol>${c.causas_ociosidade.map((x) => `<li><b>${esc(x.funcao)}</b>: ${fmt1.format(x.horas_paradas)} h paradas (${fmt1.format(x.ociosidade)}% da função),
         principalmente nas semanas de ${x.semanas.map(dataBR).join(", ")}</li>`).join("")}</ol>`
     : "<p class='discreto'>Sem horas paradas.</p>";
+  desenharContinuidade(c);
   $("#caminho-critico").innerHTML = (c.caminho_critico || []).map((x) => `<b>${esc(x)}</b>`).join(" → ");
   $("#tabela-indiretos").innerHTML = linhasPeriodo((c.indiretos || []).filter((i) => i.tipo !== "fixo"));
   $("#tabela-receitas").innerHTML = linhasPeriodo(c.receitas);
 }
+
+// ------------------------------------------------------------------ continuidade de equipe
+
+function textoUso(u, depois) {
+  if (!u) return "—";
+  const k = depois ? u.semanas_paradas_depois : u.semanas_paradas_antes;
+  const outra = depois ? u.seguinte : u.anterior;
+  return `<b>${esc(u.codigo)}</b> <small>${esc((u.nome || "").slice(0, 40))}</small> · ${fmt1.format(u.horas)} h`
+    + (k ? `<br><small>${k} semana(s) parada ${depois ? "depois" : "antes"}${outra ? ` (${depois ? "até a" : "desde a"} ${esc(outra)})` : ""}</small>` : "");
+}
+
+function desenharContinuidade(c) {
+  const linhas = c.continuidade;
+  if (!linhas) {
+    $("#tabela-continuidade").innerHTML = "<tbody><tr><td class='discreto'>Cenário calculado numa versão anterior: recalcule para ver a continuidade de equipe.</td></tr></tbody>";
+    $("#btn-melhorias").hidden = true;
+    $("#melhorias").innerHTML = "";
+    return;
+  }
+  $("#btn-melhorias").hidden = false;
+  const sv = c.saida_volta_funcao || {};
+  $("#tabela-continuidade").innerHTML = `<thead><tr><th>Função</th><th>Entrada / saída</th><th class="num">Entradas</th><th class="num">Semanas na obra</th>
+    <th class="num">Semanas sem serviço</th><th class="num">Horas paradas</th><th class="num">Custo parado</th><th>Quem puxa a entrada</th><th>Quem segura a saída</th></tr></thead><tbody>
+    ${linhas.map((l) => `<tr title="${esc(l.texto)}"><td><b>${esc(l.funcao)}</b></td>
+      <td class="nowrap">sem. ${l.semana_entrada} (${dataBR(l.entrada)})<br>sem. ${l.semana_saida} (${dataBR(l.saida)})</td>
+      <td class="num">${l.entradas} <small class="discreto">(${textoEntradas(l.entradas_permitidas)})</small>${sv[l.funcao] ? `<br><small>${sv[l.funcao].pessoas} volta(s): ${reais(sv[l.funcao].custo)}</small>` : ""}</td>
+      <td class="num">${l.semanas_na_obra}</td><td class="num">${l.semanas_sem_servico}</td>
+      <td class="num">${fmt1.format(l.horas_paradas)}</td><td class="num">${reais(l.custo_horas_paradas)}</td>
+      <td>${textoUso(l.puxa_entrada, true)}</td><td>${textoUso(l.segura_saida, false)}</td></tr>`).join("")}</tbody>`;
+  const textos = linhas.filter((l) => l.semanas_sem_servico && l.texto).slice(0, 3);
+  const m = c.melhorias;
+  let html = textos.length ? `<ul class="frases-continuidade">${textos.map((l) => `<li>${esc(l.texto)}</li>`).join("")}</ul>` : "";
+  if (m) {
+    html += `<h3>Melhorias encontradas <small class="discreto">(${m.testadas.length} alternativa(s) testada(s), ${fmt1.format(m.tempo_por_teste)} s cada${m.interrompido ? ", busca interrompida" : ""})</small></h3>
+      <p class="discreto">Ganho em relação a este cenário recalculado com o mesmo tempo (${reais(m.base.custo_total)}, ociosidade ${fmt1.format(m.base.ociosidade)}%). Depois de aplicar, o cenário é recalculado com o tempo normal.</p>`;
+    html += m.sugestoes.length
+      ? `<table class="simples"><thead><tr><th>Mudança</th><th class="num">Ganho</th><th class="num">Ociosidade</th><th class="num">Término</th><th></th></tr></thead><tbody>
+        ${m.sugestoes.map((x, i) => `<tr><td>${esc(x.texto)}</td><td class="num"><b>${reais(x.ganho)}</b></td>
+          <td class="num">${fmt1.format(x.ociosidade)}% <small>(${x.ganho_ociosidade >= 0 ? "−" : "+"}${fmt1.format(Math.abs(x.ganho_ociosidade))} pontos)</small></td>
+          <td class="num">${dataBR(x.termino)}</td>
+          <td><button type="button" class="secundario pequeno" data-melhoria="${i}">Aplicar nesta obra</button></td></tr>`).join("")}</tbody></table>`
+      : "<p class='discreto'>Nenhuma das alternativas testadas melhorou o custo deste cenário.</p>";
+  }
+  $("#melhorias").innerHTML = html;
+}
+
+$("#btn-melhorias").addEventListener("click", async () => {
+  if (!est.cenId) return;
+  mensagem($("#msg-melhorias"), "", "");
+  try {
+    const st = await api(`/api/obras/${obraId}/cronograma/melhorias`, { json: { cenario: est.cenId } });
+    mostrarProgresso(st);
+    acompanhar();
+  } catch (err) { mensagem($("#msg-melhorias"), err.message, "erro"); }
+});
+
+$("#melhorias").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-melhoria]");
+  if (!b || !est.cen?.melhorias) return;
+  const x = est.cen.melhorias.sugestoes[Number(b.dataset.melhoria)];
+  try {
+    const st = await api(`/api/obras/${obraId}/cronograma/melhorias/aplicar`, { json: { acao: x, prazo_meses: est.cen.prazo_meses } });
+    est.p = await api(`/api/obras/${obraId}/cronograma/parametros`);
+    desenharParametros();
+    mensagem($("#msg-melhorias"), `Aplicado nesta obra: ${x.texto}. Recalculando o cenário de ${fmt2.format(est.cen.prazo_meses)} meses…`, "ok");
+    mostrarProgresso(st);
+    acompanhar();
+  } catch (err) { mensagem($("#msg-melhorias"), err.message, "erro"); }
+});
 
 carregar();

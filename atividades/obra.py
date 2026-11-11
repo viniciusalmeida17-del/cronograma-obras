@@ -5,7 +5,13 @@ from typing import Any, Iterable
 
 from armazenamento import Banco
 
-from .biblioteca import Biblioteca, ErroBiblioteca, salvar_atividade_na_biblioteca
+from .biblioteca import (
+    CRITERIOS_TIPO,
+    PRAZOS_ESPERA,
+    Biblioteca,
+    ErroBiblioteca,
+    salvar_atividade_na_biblioteca,
+)
 from .reconhecimento import (
     CONFIRMADO,
     PENDENTES,
@@ -16,7 +22,11 @@ from .reconhecimento import (
     resumo_ligacao,
 )
 from .rede import (
+    INDIRETA,
     ErroRede,
+    alternativas_de_prazo,
+    aplicar_prazos,
+    usa_norma,
     dependencias_de,
     editar_atividade,
     indiretas,
@@ -118,20 +128,68 @@ def montar_rede_obra(banco: Banco, obra_id: int, biblioteca: Biblioteca) -> dict
     pendentes = [s for s in dados["servicos"] if not s.get("atividade_biblioteca") or s.get("status_ligacao") in PENDENTES]
     if pendentes:
         raise ErroObra(f"Há {len(pendentes)} serviço(s) sem atividade. Resolva as pendências antes de seguir.")
-    rede = montar_rede(biblioteca, dados["servicos"])
+    try:
+        rede = montar_rede(biblioteca, dados["servicos"], prazos=banco.prazos_espera(obra_id))
+    except ErroRede as exc:
+        raise ErroObra(str(exc)) from exc
     banco.salvar_rede(obra_id, rede)
-    return estado_rede(banco, obra_id)
+    return estado_rede(banco, obra_id, biblioteca)
 
 
-def estado_rede(banco: Banco, obra_id: int) -> dict[str, Any]:
+def definir_prazos_espera(banco: Banco, obra_id: int, prazos: str, biblioteca: Biblioteca | None = None
+                          ) -> dict[str, Any]:
+    """Prazos de espera da obra: "pratica" (depende_de, padrão) ou "norma" (depende_de_norma onde houver).
+
+    Troca as dependências das atividades que mudam (com herança, guardadas ao montar a rede), mantém as editadas
+    nesta obra, valida ciclo e grava. Sem rede montada, só grava a opção (vale ao montar).
+    """
+    if prazos not in PRAZOS_ESPERA:
+        raise ErroObra("Prazos de espera: use 'pratica' ou 'norma'.")
+    _obra(banco, obra_id)
+    rede = banco.carregar_rede(obra_id)
+    if rede is not None:
+        if not any(a.get("deps_prazos") for a in rede["atividades"].values()) and biblioteca is not None:
+            # rede montada antes do item 6: calcula as alternativas com a biblioteca atual
+            seq = {c for c, a in rede["atividades"].items() if a["tipo"] != INDIRETA and c in biblioteca.atividades}
+            ordem = {c: a["ordem_biblioteca"] for c, a in rede["atividades"].items()}
+            for cod, alt in alternativas_de_prazo(biblioteca, seq, ordem).items():
+                rede["atividades"][cod]["deps_prazos"] = alt
+        try:
+            rede = aplicar_prazos(rede, prazos)
+        except ErroRede as exc:
+            raise ErroObra(f"Com os prazos de {'norma' if prazos == 'norma' else 'prática'}: {exc}") from exc
+        banco.salvar_rede(obra_id, rede)
+    banco.gravar_prazos_espera(obra_id, prazos)
+    return estado_rede(banco, obra_id, biblioteca) if rede is not None else {"prazos_espera": prazos}
+
+
+def estado_rede(banco: Banco, obra_id: int, biblioteca: Biblioteca | None = None) -> dict[str, Any]:
     rede = banco.carregar_rede(obra_id)
     if rede is None:
         raise ErroObra("A rede desta obra ainda não foi montada.")
+    prazos = banco.prazos_espera(obra_id)
     seq = sequencia(rede)
+    if biblioteca is None:
+        try:
+            from .biblioteca import carregar_biblioteca
+
+            biblioteca = carregar_biblioteca(funcoes=None)
+        except ErroBiblioteca:
+            pass
+    legenda = (biblioteca.legenda if biblioteca else {}) or {}
+    for a in seq:
+        a["usa_norma"] = usa_norma(a, prazos)
+        a["tem_norma"] = bool(a.get("deps_prazos"))
+        a["criterio_tipo"] = legenda.get(a["tipo"]) or CRITERIOS_TIPO.get(a["tipo"])
+        if a.get("deps_prazos"):
+            a["depende_de_pratica"] = _texto_deps(a["deps_prazos"]["pratica"])
+            a["depende_de_norma"] = _texto_deps(a["deps_prazos"]["norma"])
     ind = indiretas(rede)
     todas = list(rede["atividades"].values())
     return {
         "obra": _obra(banco, obra_id)["obra"],
+        "prazos_espera": prazos,
+        "atividades_norma": [a["codigo"] for a in seq if a["usa_norma"]],
         "sequencia": seq,
         "indiretas": ind,
         "resumo": {
@@ -143,6 +201,13 @@ def estado_rede(banco: Banco, obra_id: int) -> dict[str, Any]:
             "total_bdi": round(sum(a["total_bdi"] for a in todas), 2),
         },
     }
+
+
+def _texto_deps(deps: list[dict[str, Any]]) -> str:
+    from .rede import dict_para_dep
+    from .biblioteca import formatar_dependencias
+
+    return formatar_dependencias([dict_para_dep(d) for d in deps])
 
 
 def editar_atividade_obra(

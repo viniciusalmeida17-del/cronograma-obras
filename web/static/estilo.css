@@ -450,3 +450,21 @@ a.etapa-botao:hover { border-color: var(--primaria); background: #eaf1fb; }
 }
 .confirmar-exclusao h3 { margin-top: 0; color: #a51f1f; }
 .confirmar-exclusao ul { margin: 6px 0; padding-left: 20px; max-height: 220px; overflow: auto; }
+
+/* item 6: prazos de espera, trocas de função, fonte */
+.prazos-espera { display: flex; flex-wrap: wrap; gap: .4rem 1rem; align-items: center; margin: .6rem 0; }
+.prazos-espera label { font-weight: 600; display: flex; gap: .5rem; align-items: center; }
+.prazos-espera .discreto { flex: 1 1 24rem; }
+.prazos-espera .mensagem { flex-basis: 100%; margin: 0; }
+.selo-norma { display: inline-block; font-size: .72rem; padding: 0 .4rem; border-radius: .6rem; background: #fde7c4; color: #7a4a00; font-weight: 600; }
+td.trocas { font-size: .78rem; max-width: 14rem; }
+.troca { display: inline-block; background: #eef2f7; border-radius: .3rem; padding: 0 .3rem; margin: 1px 0; white-space: nowrap; }
+.fonte { color: #5b6b7f; }
+.form-trocas { display: flex; gap: 6px 14px; align-items: end; flex-wrap: wrap; margin: 6px 0 8px; padding-top: 6px; border-top: 1px dashed #d5dbe3; }
+.form-trocas label.largo { flex: 1 1 26rem; display: flex; flex-direction: column; }
+.form-trocas input[name=trocar_funcoes] { width: 100%; }
+.form-trocas .discreto, .form-trocas .mensagem { flex-basis: 100%; margin: 0; }
+.custo-troca { display: inline-flex; gap: 6px; align-items: center; }
+.custo-troca input { width: 90px; }
+.frases-continuidade { margin: .5rem 0 0 1.1rem; }
+#tabela-continuidade td { vertical-align: top; }

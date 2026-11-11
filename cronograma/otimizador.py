@@ -4,7 +4,7 @@ Variáveis: início (dia útil) e modo de cada tarefa; contratados C[f][s] de ca
 Restrições: elos término-início e início-início com espera (dias corridos ou úteis), rígidas até
 `limite_rigidas` dias úteis depois de liberadas, capacidade diária ≤ C da semana, C sobe até um pico e depois
 só desce (ou, nas funções que podem sair e voltar, reduções de pelo menos N semanas), terceirizadas em até 3
-partes, prazo, máximos opcionais.
+partes, prazo, máximos opcionais; entradas na obra por função (uma, até N ou livre).
 Objetivo: mão de obra própria paga (C × horas × custo/h) + indiretos que variam com o prazo + desempate
 por terminar mais cedo.
 """
@@ -17,6 +17,8 @@ from typing import Any, Callable
 
 from .agenda import (
     DIAS_POR_MES,
+    LIVRE,
+    UMA_ENTRADA,
     Instancia,
     agendar_cedo,
     agendar_no_prazo,  # noqa: F401
@@ -48,7 +50,7 @@ def _cp():
 
 
 def custo_da_solucao(inst: Instancia, resumo: dict[str, Any]) -> float:
-    return resumo["custo_mao_de_obra"] + resumo["custo_indiretos"]
+    return resumo["custo_mao_de_obra"] + resumo["custo_indiretos"] + resumo.get("custo_saida_volta", 0.0)
 
 
 def avaliar(inst: Instancia, sol: dict[str, dict[str, Any]], contratados: dict[str, list[int]] | None = None
@@ -274,7 +276,8 @@ def otimizar(
             ivs.append(m.NewFixedSizeIntervalVar(i0, i1 - i0 + 1, f"cap_{f}_{w}"))
             demandas.append(teto - C[f][w])
         m.AddCumulative(ivs, demandas, teto)
-        if f in inst.transferiveis:
+        entradas = inst.entradas_de(f)
+        if entradas == LIVRE:
             # toda redução dura pelo menos `min_semanas_reducao` semanas
             for w in range(1, n_semanas):
                 cai = m.NewBoolVar(f"cai_{f}_{w}")
@@ -282,22 +285,42 @@ def otimizar(
                 for k in range(1, inst.min_semanas_reducao):
                     if w + k < n_semanas:
                         m.Add(C[f][w + k] <= C[f][w]).OnlyEnforceIf(cai)
-            if inst.custo_troca > 0:
-                troca = round(CENTAVOS * inst.custo_troca)
-                for w in range(n_semanas + 1):
-                    ant = C[f][w - 1] if w > 0 else 0
-                    atual = C[f][w] if w < n_semanas else 0
-                    dv = m.NewIntVar(0, teto, f"tr_{f}_{w}")
-                    m.Add(dv >= atual - ant)
-                    m.Add(dv >= ant - atual)
-                    custo_termos.append(troca * dv)
-        else:
+        elif entradas == UMA_ENTRADA:
             p = [m.NewBoolVar(f"p_{f}_{w}") for w in range(n_semanas - 1)]
             for w in range(n_semanas - 1):
                 if w:
                     m.AddImplication(p[w - 1], p[w])
                 m.Add(C[f][w] <= C[f][w + 1]).OnlyEnforceIf(p[w].Not())
                 m.Add(C[f][w] >= C[f][w + 1]).OnlyEnforceIf(p[w])
+        else:
+            # até N entradas: sai (C = 0) e volta até N − 1 vezes; ausência de pelo menos N semanas;
+            # dentro de cada entrada, sobe até o pico e depois só desce
+            on = [m.NewBoolVar(f"on_{f}_{w}") for w in range(n_semanas)]
+            st = [m.NewBoolVar(f"st_{f}_{w}") for w in range(n_semanas)]
+            for w in range(n_semanas):
+                m.Add(C[f][w] <= teto * on[w])
+                m.Add(C[f][w] >= on[w])
+                m.Add(st[w] >= on[w] - (on[w - 1] if w else 0))
+            m.Add(sum(st) <= entradas)
+            for w in range(1, n_semanas):
+                for k in range(1, inst.min_semanas_reducao):
+                    if w + k < n_semanas:
+                        m.AddBoolOr([on[w - 1].Not(), on[w], on[w + k].Not()])
+            p = [m.NewBoolVar(f"p_{f}_{w}") for w in range(n_semanas - 1)]
+            for w in range(n_semanas - 1):
+                if w:
+                    m.AddBoolOr([p[w - 1].Not(), on[w].Not(), p[w]])
+                m.Add(C[f][w] <= C[f][w + 1]).OnlyEnforceIf(p[w].Not())
+                m.Add(C[f][w] >= C[f][w + 1]).OnlyEnforceIf(p[w])
+        mov = inst.custo_movimento(f)
+        if entradas != UMA_ENTRADA and mov > 0:
+            # custo de saída e volta: 2 movimentos por pessoa que volta (aumentos além do pico)
+            inc = [m.NewIntVar(0, teto, f"inc_{f}_{w}") for w in range(n_semanas)]
+            for w in range(n_semanas):
+                m.Add(inc[w] >= C[f][w] - (C[f][w - 1] if w else 0))
+            pico_f = m.NewIntVar(0, teto, f"pico_{f}")
+            m.AddMaxEquality(pico_f, C[f])
+            custo_termos.append(round(CENTAVOS * 2 * mov) * (sum(inc) - pico_f))
         custo_h = max(inst.custo_hora.get(f, 0.0), 0.01)
         for w in range(n_semanas):
             custo_termos.append(C[f][w] * round(CENTAVOS * pagas[w] * custo_h))

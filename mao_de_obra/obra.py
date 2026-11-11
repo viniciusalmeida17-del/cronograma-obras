@@ -39,6 +39,11 @@ def atividades_da_obra(banco: Banco, obra_id: int, biblioteca: Biblioteca | None
         for campo in CAMPOS_NOVOS:
             if a.get(campo) is None and lib is not None:
                 a[campo] = getattr(lib, campo)
+        if a.get("trocar_funcoes") is None:   # rede montada antes do item 6: trocas da biblioteca
+            from atividades.biblioteca import formatar_trocas
+
+            a["trocar_funcoes"] = formatar_trocas(lib.trocar_funcoes) if lib is not None else ""
+            a["trocar_funcoes_biblioteca"] = a["trocar_funcoes"]
         a["execucao_padrao"] = a.get("execucao_padrao") or "propria"
         a["equipe_padrao"] = a.get("equipe_padrao") or EQUIPE_PADRAO
         a["equipe_max"] = a.get("equipe_max") or EQUIPE_MAX
@@ -157,6 +162,7 @@ def estado_mao_de_obra(banco: Banco, obra_id: int, biblioteca: Biblioteca | None
     resultado["abas_composicoes"] = _json(obra.get("composicoes_abas"))
     resultado["funcoes_conhecidas"] = sorted({h["funcao"] for a in analises.values() for h in a["horas"]}
                                              | {f for a in resultado["atividades"] for f in a["horas_brutas"]})
+    resultado["funcoes_empresa"] = tabela.funcoes()
     resultado["pode_seguir"] = not resultado["pendencias"]
     resultado["producao"] = producoes
     resultado["juntar"] = {"possivel": tabela.juntar_possivel, "padrao": tabela.juntar_padrao,
@@ -342,6 +348,33 @@ def definir_atividade(banco: Banco, obra_id: int, codigo: str, rendimento: Any =
     banco.atualizar_execucao(obra_id, codigo, **campos)
     if quantidades:
         banco.gravar_maquinas(obra_id, codigo, quantidades)
+
+
+def definir_trocas(banco: Banco, obra_id: int, codigo: str, texto: Any, salvar_biblioteca: bool = False,
+                   caminho_biblioteca: Any = None, biblioteca: Biblioteca | None = None) -> dict[str, Any]:
+    """Trocas de função (item 6) só nesta obra: 'Pintor > Servente; Eletricista > Pedreiro'. Vazio = sem troca.
+
+    Com `salvar_biblioteca`, grava também na coluna trocar_funcoes do Excel da biblioteca (com cópia de segurança).
+    Recalcula horas, equipes e durações. Devolve o estado da mão de obra (com `backup_biblioteca`).
+    """
+    from atividades.biblioteca import ErroBiblioteca, formatar_trocas, interpretar_trocas, salvar_atividade_na_biblioteca
+
+    atividades = atividades_da_obra(banco, obra_id, biblioteca)
+    if codigo not in atividades or atividades[codigo]["tipo"] == INDIRETA:
+        raise ErroMaoDeObra(f"Atividade {codigo} não está na sequência desta obra.")
+    trocas, erros = interpretar_trocas(texto, carregar_funcoes().funcoes())
+    if erros:
+        raise ErroMaoDeObra(f"{codigo}: " + "; ".join(erros) + ".")
+    banco.atualizar_atividade_obra(obra_id, codigo, trocar_funcoes=formatar_trocas(trocas))
+    backup = None
+    if salvar_biblioteca:
+        try:
+            backup = salvar_atividade_na_biblioteca(codigo, None, None, caminho_biblioteca, trocar_funcoes=trocas)
+        except ErroBiblioteca as exc:
+            raise ErroMaoDeObra("Não foi possível gravar na biblioteca: " + "; ".join(e["mensagem"] for e in exc.erros))
+    estado = estado_mao_de_obra(banco, obra_id, biblioteca)
+    estado["backup_biblioteca"] = str(backup) if backup else None
+    return estado
 
 
 def _validar_horas(horas: dict[str, Any]) -> dict[str, float]:

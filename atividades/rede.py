@@ -15,7 +15,17 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Mapping
 
-from .biblioteca import TIPOS, Biblioteca, Dependencia, formatar_dependencias, interpretar_dependencias
+from .biblioteca import (
+    NORMA,
+    PRATICA,
+    PRAZOS_ESPERA,
+    TIPOS,
+    Biblioteca,
+    Dependencia,
+    formatar_dependencias,
+    formatar_trocas,
+    interpretar_dependencias,
+)
 from .grafo import achar_ciclo, ordem_topologica
 
 ATIVIDADE_FINAL = "LIM-01"
@@ -87,7 +97,8 @@ def _maior(a: Dependencia | None, b: Dependencia) -> bool:
     return (b.tipo == "TI", b.espera_uteis()) > (a.tipo == "TI", a.espera_uteis())
 
 
-def _dependencias_efetivas(biblioteca: Biblioteca, entram: set[str]) -> dict[str, dict[str, tuple[Dependencia, str]]]:
+def _dependencias_efetivas(biblioteca: Biblioteca, entram: set[str], prazos: str = PRATICA
+                           ) -> dict[str, dict[str, tuple[Dependencia, str]]]:
     """Para cada atividade da obra: {depende_de: (Dependencia, origem)}, já com a herança das que saíram.
 
     Se B depende de A+x e A sai, B herda as dependências de A: C+y vira C+(x+y), com o tipo do elo de B.
@@ -100,7 +111,7 @@ def _dependencias_efetivas(biblioteca: Biblioteca, entram: set[str]) -> dict[str
         if codigo in memo:
             return memo[codigo]
         res: dict[str, Dependencia] = {}
-        for d in biblioteca.atividades[codigo].depende_de:
+        for d in biblioteca.atividades[codigo].dependencias(prazos):
             candidatas = [d] if d.codigo in entram else [somar_elos(d, y, c) for c, y in herdadas(d.codigo).items()]
             for nova in candidatas:
                 if _maior(res.get(nova.codigo), nova):
@@ -111,7 +122,7 @@ def _dependencias_efetivas(biblioteca: Biblioteca, entram: set[str]) -> dict[str
     efetivas: dict[str, dict[str, tuple[Dependencia, str]]] = {}
     for cod in entram:
         deps: dict[str, tuple[Dependencia, str]] = {}
-        for d in biblioteca.atividades[cod].depende_de:
+        for d in biblioteca.atividades[cod].dependencias(prazos):
             if d.codigo in entram:
                 candidatas = [(d, "biblioteca")]
             else:
@@ -133,11 +144,33 @@ def dict_para_dep(d: Mapping[str, Any]) -> Dependencia:
     return Dependencia(d["depende_de"], int(d.get("espera_dias") or 0), d.get("tipo") or "TI", d.get("unidade") or "d")
 
 
-def montar_rede(biblioteca: Biblioteca, servicos: Iterable[Mapping[str, Any]], excluir: Iterable[str] = ()) -> dict[str, Any]:
+def _lista_deps(efetivas: dict[str, tuple[Dependencia, str]], cod: str, ordem: Mapping[str, int]) -> list[dict[str, Any]]:
+    return [dep_para_dict(cod, d, origem) for _, (d, origem) in sorted(efetivas.items(), key=lambda x: ordem[x[0]])]
+
+
+def alternativas_de_prazo(biblioteca: Biblioteca, na_sequencia: set[str], ordem: Mapping[str, int]
+                          ) -> dict[str, dict[str, list[dict[str, Any]]]]:
+    """Atividades cujas dependências (já com herança) mudam com os prazos de espera: {codigo: {pratica, norma}}."""
+    por_prazo = {p: _dependencias_efetivas(biblioteca, na_sequencia, p) for p in PRAZOS_ESPERA}
+    res = {}
+    for cod in na_sequencia:
+        listas = {p: _lista_deps(por_prazo[p].get(cod, {}), cod, ordem) for p in PRAZOS_ESPERA}
+        if listas[PRATICA] != listas[NORMA]:
+            res[cod] = listas
+    return res
+
+
+def montar_rede(biblioteca: Biblioteca, servicos: Iterable[Mapping[str, Any]], excluir: Iterable[str] = (),
+                prazos: str = PRATICA) -> dict[str, Any]:
     """Monta a rede da obra a partir dos serviços já ligados.
 
     :param excluir: atividades a tirar da obra mesmo tendo serviço (os serviços continuam ligados).
+    :param prazos: prazos de espera da obra: "pratica" (depende_de) ou "norma" (depende_de_norma onde houver).
+    As dependências das duas opções ficam guardadas em `deps_prazos` das atividades em que mudam, para trocar
+    a opção depois sem a biblioteca.
     """
+    if prazos not in PRAZOS_ESPERA:
+        raise ErroRede(f"Prazos de espera '{prazos}' inválidos (use {' ou '.join(PRAZOS_ESPERA)}).")
     servicos = list(servicos)
     totais = totais_por_atividade(servicos)
     entram = escolher_atividades(biblioteca, set(totais)) - set(excluir)
@@ -157,15 +190,16 @@ def montar_rede(biblioteca: Biblioteca, servicos: Iterable[Mapping[str, Any]], e
             "ordem_biblioteca": a.ordem, "editada": False,
             "execucao_padrao": a.execucao_padrao, "equipe_padrao": a.equipe_padrao,
             "equipe_max": a.equipe_max, "duracao_fixa_dias": a.duracao_fixa_dias, "tipo_producao": a.tipo_producao,
+            "trocar_funcoes": formatar_trocas(a.trocar_funcoes), "trocar_funcoes_biblioteca": formatar_trocas(a.trocar_funcoes),
+            "fonte": a.fonte, "deps_prazos": None, "deps_editadas": False,
         }
 
     na_sequencia = {c for c, a in atividades.items() if a["tipo"] != INDIRETA}
-    efetivas = _dependencias_efetivas(biblioteca, na_sequencia)
-    dependencias = [
-        dep_para_dict(cod, d, origem)
-        for cod in sorted(efetivas, key=lambda c: atividades[c]["ordem_biblioteca"])
-        for _, (d, origem) in sorted(efetivas[cod].items(), key=lambda x: atividades[x[0]]["ordem_biblioteca"])
-    ]
+    ordem = {c: a["ordem_biblioteca"] for c, a in atividades.items()}
+    efetivas = _dependencias_efetivas(biblioteca, na_sequencia, prazos)
+    dependencias = [d for cod in sorted(efetivas, key=lambda c: ordem[c]) for d in _lista_deps(efetivas[cod], cod, ordem)]
+    for cod, alt in alternativas_de_prazo(biblioteca, na_sequencia, ordem).items():
+        atividades[cod]["deps_prazos"] = alt
     rede = {"atividades": atividades, "dependencias": dependencias}
     ligar_ao_fim(rede)
     validar_rede(rede)
@@ -272,6 +306,7 @@ def editar_atividade(
         nova["dependencias"] = [d for d in nova["dependencias"] if d["atividade"] != codigo]
         nova["dependencias"] += [dep_para_dict(codigo, d, "usuario") for d in vistos.values()]
         ativ["editada"] = True
+        ativ["deps_editadas"] = True   # vale nas duas opções de prazos de espera
     ligar_ao_fim(nova)
     validar_rede(nova)
     return nova
@@ -283,3 +318,30 @@ def dependencias_de(rede: Mapping[str, Any], codigo: str, incluir_fim: bool = Tr
         for d in rede["dependencias"]
         if d["atividade"] == codigo and (incluir_fim or d["origem"] != "fim")
     ]
+
+
+def aplicar_prazos(rede: Mapping[str, Any], prazos: str) -> dict[str, Any]:
+    """Troca as dependências das atividades que mudam com os prazos de espera (prática ↔ norma).
+
+    As editadas pelo usuário nesta obra ficam como estão. Valida ciclo. Retorna uma nova rede.
+    """
+    if prazos not in PRAZOS_ESPERA:
+        raise ErroRede(f"Prazos de espera '{prazos}' inválidos (use {' ou '.join(PRAZOS_ESPERA)}).")
+    nova = {
+        "atividades": {c: dict(a) for c, a in rede["atividades"].items()},
+        "dependencias": [dict(d) for d in rede["dependencias"]],
+    }
+    trocar = {c: a["deps_prazos"][prazos] for c, a in nova["atividades"].items()
+              if a.get("deps_prazos") and not a.get("deps_editadas")}
+    if trocar:
+        nova["dependencias"] = [d for d in nova["dependencias"] if d["atividade"] not in trocar or d["origem"] == "fim"]
+        for cod, deps in trocar.items():
+            nova["dependencias"] += [dict(d) for d in deps if d["depende_de"] in nova["atividades"]]
+    ligar_ao_fim(nova)
+    validar_rede(nova)
+    return nova
+
+
+def usa_norma(atividade: Mapping[str, Any], prazos: str) -> bool:
+    """A atividade está com as dependências de norma (marcada na tela de sequência)?"""
+    return prazos == NORMA and bool(atividade.get("deps_prazos")) and not atividade.get("deps_editadas")

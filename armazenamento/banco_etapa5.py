@@ -37,7 +37,11 @@ CREATE TABLE IF NOT EXISTS obra_calendario (
     terceirizados         TEXT,               -- JSON atividade -> valor contratado (NULL = planilha sem BDI)
     criterios             TEXT,               -- JSON item da planilha -> proporcional | mensal | fixo
     maquinas_max          INTEGER,            -- máximo de máquinas de cada equipamento por atividade (padrão 6)
-    dividir_terceirizadas INTEGER             -- 1 = terceirizadas podem ser feitas em até 3 partes (padrão)
+    dividir_terceirizadas INTEGER,            -- 1 = terceirizadas podem ser feitas em até 3 partes (padrão)
+    -- item 6
+    entradas              TEXT,               -- JSON funcao -> 0 (livre) ou até N entradas (NULL = padrão)
+    custo_troca_tipo      TEXT,               -- horas (padrão: horas da própria função) ou reais
+    custo_troca_horas     REAL                -- horas por pessoa que sai ou volta (padrão 8)
 );
 
 -- padrões lembrados para as próximas obras (salários, encargos, indiretos reais)
@@ -70,6 +74,7 @@ CREATE TABLE IF NOT EXISTS cenarios (
     custo_total           REAL,               -- custo real que varia com o prazo
     receita_variavel      REAL,               -- etapa 5.1: indiretas com critério mensal
     resultado             REAL,               -- receita variável − custo variável
+    custo_saida_volta     REAL,               -- item 6: pessoas que saem e voltam (incluído no custo_total)
     detalhes              TEXT,               -- JSON: menor prazo, caminho crítico, indiretos, mensagem...
     calculado_em          TEXT NOT NULL,
     segundos              REAL,
@@ -108,10 +113,12 @@ CALENDARIO_PADRAO: dict[str, Any] = {
     "max_pessoas_total": None, "max_por_funcao": {}, "tempo_limite": 60, "prazos": [],
     "transferiveis": None, "min_semanas_reducao": 2, "custo_troca": 0.0, "salarios": {}, "encargos": None,
     "indiretos_reais": None, "terceirizados": {}, "criterios": {}, "maquinas_max": 6, "dividir_terceirizadas": 1,
+    "entradas": None, "custo_troca_tipo": None, "custo_troca_horas": 8.0,
 }
 _JSON = ("feriados_locais", "custos_hora", "max_por_funcao", "prazos", "transferiveis", "salarios",
-         "indiretos_reais", "terceirizados", "criterios")
-_PODE_SER_NULO = ("transferiveis", "indiretos_reais", "encargos", "data_inicio", "max_pessoas_total")
+         "indiretos_reais", "terceirizados", "criterios", "entradas")
+_PODE_SER_NULO = ("transferiveis", "indiretos_reais", "encargos", "data_inicio", "max_pessoas_total", "entradas",
+                  "custo_troca_tipo")
 
 
 class CronogramaMixin:
@@ -200,7 +207,8 @@ class CronogramaMixin:
                                              "contratados", "violacoes", "periodos_indiretas", "equipe_indireta",
                                              "receita_variavel", "resultado", "receitas", "horas_feriado",
                                              "ociosidade_funcao", "causas_ociosidade", "diagnostico", "avisos_custos",
-                                             "custo_terceirizados", "partes", "maquinas")}
+                                             "custo_terceirizados", "partes", "maquinas",
+                                             "continuidade", "saida_volta_funcao", "entradas")}
         agora = datetime.now().isoformat(timespec="seconds")
         with closing(self._conectar()) as con, con:
             antes = con.execute("SELECT MAX(escolhido) FROM cenarios WHERE obra_id = ? AND prazo_meses = ?",
@@ -210,12 +218,13 @@ class CronogramaMixin:
             cur = con.execute(
                 """INSERT INTO cenarios (obra_id, prazo_meses, data_limite, situacao, termino, pico, homem_semana,
                        ociosidade, custo_mao_de_obra, custo_indiretos, custo_total, detalhes, calculado_em, segundos,
-                       escolhido, receita_variavel, resultado)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       escolhido, receita_variavel, resultado, custo_saida_volta)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (obra_id, prazo_meses, data_limite, res["situacao"], res.get("termino"), res.get("pico"),
                  res.get("homem_semana"), res.get("ociosidade"), res.get("custo_mao_de_obra"),
                  res.get("custo_indiretos"), res.get("custo_total"), json.dumps(detalhes, ensure_ascii=False),
-                 agora, res.get("segundos"), escolhido, res.get("receita_variavel"), res.get("resultado")))
+                 agora, res.get("segundos"), escolhido, res.get("receita_variavel"), res.get("resultado"),
+                 res.get("custo_saida_volta")))
             cid = cur.lastrowid
             con.executemany(
                 "INSERT INTO cenario_atividades (cenario_id, atividade, inicio, termino, modo, duracao, unidade, folga,"
@@ -266,3 +275,13 @@ class CronogramaMixin:
     def escolher_cenario(self, obra_id: int, cenario_id: int) -> None:
         with closing(self._conectar()) as con, con:
             con.execute("UPDATE cenarios SET escolhido = (id = ?) WHERE obra_id = ?", (cenario_id, obra_id))
+
+    def gravar_melhorias(self, cenario_id: int, melhorias: dict[str, Any]) -> None:
+        """Resultado do "Procurar melhorias" (item 6), guardado nos detalhes do cenário."""
+        with closing(self._conectar()) as con, con:
+            r = con.execute("SELECT detalhes FROM cenarios WHERE id = ?", (cenario_id,)).fetchone()
+            if r is None:
+                return
+            det = json.loads(r["detalhes"] or "{}")
+            det["melhorias"] = melhorias
+            con.execute("UPDATE cenarios SET detalhes = ? WHERE id = ?", (json.dumps(det, ensure_ascii=False), cenario_id))

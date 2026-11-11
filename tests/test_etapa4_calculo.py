@@ -64,7 +64,7 @@ def _ativ(res, cod):
 
 def test_est03_duracao_fixa(obra_teste):
     a = _ativ(_calc(obra_teste), "EST-03")
-    assert a["duracao"] == {"dias": 28, "unidade": "corridos", "tipo": "fixa"}
+    assert a["duracao"] == {"dias": 21, "unidade": "corridos", "tipo": "fixa"}
 
 
 def test_terceirizada_sem_horas_e_pendencia_ate_duracao_manual(obra_teste):

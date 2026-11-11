@@ -14,7 +14,7 @@ import time
 import uuid
 import webbrowser
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from flask import Flask, Response, jsonify, request, send_from_directory
 from werkzeug.serving import make_server
@@ -268,7 +268,12 @@ def criar_app(
 
     @app.get("/api/obras/<int:obra_id>/rede")
     def rede(obra_id):
-        return jsonify(etapa3.estado_rede(banco, obra_id))
+        return jsonify(etapa3.estado_rede(banco, obra_id, _biblioteca_opcional()))
+
+    @app.post("/api/obras/<int:obra_id>/prazos-espera")
+    def prazos_espera(obra_id):
+        dados = request.get_json(silent=True) or {}
+        return jsonify(etapa3.definir_prazos_espera(banco, obra_id, str(dados.get("prazos") or ""), _biblioteca_opcional()))
 
     @app.post("/api/obras/<int:obra_id>/rede/<codigo>")
     def editar_rede(obra_id, codigo):
@@ -342,6 +347,13 @@ def criar_app(
         except ValueError:
             return _erro("Valor inválido.")
         return _estado(obra_id)
+
+    @app.post("/api/obras/<int:obra_id>/atividade/<codigo>/trocas")
+    def trocas_atividade(obra_id, codigo):
+        dados = request.get_json(silent=True) or {}
+        return jsonify(etapa4.definir_trocas(banco, obra_id, codigo, dados.get("trocar_funcoes") or "",
+                                             bool(dados.get("salvar_biblioteca")), caminho_biblioteca,
+                                             _biblioteca_opcional()))
 
     @app.post("/api/obras/<int:obra_id>/servico/<int:servico_id>/horas")
     def horas_servico(obra_id, servico_id):
@@ -422,6 +434,46 @@ def criar_app(
             info["progresso"] = round((c["cenario"] + parcial) / c["n"], 3)
         return info
 
+    def _iniciar_job(obra_id: int, n: int, tempo: float, tarefa: Callable[..., Any], tipo: str = "cenarios"
+                     ) -> dict[str, Any]:
+        """Roda `tarefa(progresso, parar)` numa thread (um cálculo por obra; chamar com a trava)."""
+        parar = threading.Event()
+        estado = {"rodando": True, "tipo": tipo, "cenario": 0, "n": n, "prazo": None, "tempo_limite": tempo,
+                  "inicio_cenario": time.monotonic(), "solucoes": 0, "melhor": None, "erro": None, "progresso": 0.0,
+                  "parar": parar}
+
+        def progresso(info: dict[str, Any]) -> None:
+            if info.get("evento") == "inicio":
+                estado.update(cenario=info["cenario"], n=info.get("n", estado["n"]), prazo=info["prazo"],
+                              inicio_cenario=time.monotonic(), solucoes=0, melhor=None)
+            else:
+                estado.update(solucoes=info.get("solucoes", 0), melhor=info.get("melhor"))
+
+        def rodar() -> None:
+            try:
+                tarefa(progresso, parar)
+            except Exception as exc:  # noqa: BLE001 - mostrado na tela
+                logging.getLogger("cronograma").exception("Erro no cálculo (%s) da obra %s", tipo, obra_id)
+                estado["erro"] = str(exc)
+            finally:
+                estado.update(rodando=False, progresso=1.0)
+
+        estado["thread"] = threading.Thread(target=rodar, daemon=True)
+        calculos[obra_id] = estado
+        estado["thread"].start()
+        return _estado_calculo(obra_id)
+
+    def _calcular(obra_id: int, prazos: list[float] | None = None) -> dict[str, Any]:
+        biblioteca = _biblioteca_opcional()
+        params = banco.carregar_calendario(obra_id)
+        if prazos is None:
+            prazos = params["prazos"] or etapa5.prazos_padrao(etapa5.prazo_licitacao_meses(banco.carregar_obra(obra_id)["obra"]))
+        # valida antes de abrir a thread (erros voltam na hora)
+        etapa5.montar_instancia(banco, obra_id, max(prazos) if prazos else 1, biblioteca)
+        return _iniciar_job(obra_id, len(prazos), params["tempo_limite"],
+                            lambda progresso, parar: etapa5.calcular_cenarios(banco, obra_id, prazos, biblioteca,
+                                                                              progresso=progresso, parar=parar))
+
     @app.post("/api/obras/<int:obra_id>/cronograma/calcular")
     def calcular_cenarios(obra_id):
         dados = request.get_json(silent=True) or {}
@@ -430,36 +482,40 @@ def criar_app(
                 return _erro("Já há um cálculo em andamento para esta obra.", 409)
             if "prazos" in dados or "tempo_limite" in dados:
                 etapa5.salvar_parametros_cronograma(banco, obra_id, {k: dados[k] for k in ("prazos", "tempo_limite") if k in dados})
+            return jsonify(_calcular(obra_id))
+
+    @app.post("/api/obras/<int:obra_id>/cronograma/melhorias")
+    def procurar_melhorias(obra_id):
+        """Procurar melhorias (continuidade de equipe) no cenário escolhido ou no informado, em segundo plano."""
+        dados = request.get_json(silent=True) or {}
+        with trava_calculos:
+            if (calculos.get(obra_id) or {}).get("rodando"):
+                return _erro("Já há um cálculo em andamento para esta obra.", 409)
+            cid = dados.get("cenario")
+            tempo = dados.get("tempo") or etapa5.TEMPO_MELHORIAS
+            try:
+                tempo = float(tempo)
+            except (TypeError, ValueError):
+                return _erro("Tempo inválido.")
+            if not 1 <= tempo <= 600:
+                return _erro("O tempo por teste deve estar entre 1 e 600 segundos.")
             biblioteca = _biblioteca_opcional()
-            params = banco.carregar_calendario(obra_id)
-            prazos = params["prazos"] or etapa5.prazos_padrao(etapa5.prazo_licitacao_meses(banco.carregar_obra(obra_id)["obra"]))
-            # valida antes de abrir a thread (erros voltam na hora)
-            etapa5.montar_instancia(banco, obra_id, max(prazos) if prazos else 1, biblioteca)
-            parar = threading.Event()
-            estado = {"rodando": True, "cenario": 0, "n": len(prazos), "prazo": None, "tempo_limite": params["tempo_limite"],
-                      "inicio_cenario": time.monotonic(), "solucoes": 0, "melhor": None, "erro": None, "progresso": 0.0,
-                      "parar": parar}
+            return jsonify(_iniciar_job(
+                obra_id, 1, tempo,
+                lambda progresso, parar: etapa5.procurar_melhorias(banco, obra_id, int(cid) if cid else None, biblioteca,
+                                                                   tempo, progresso, parar),
+                tipo="melhorias"))
 
-            def progresso(info: dict[str, Any]) -> None:
-                if info.get("evento") == "inicio":
-                    estado.update(cenario=info["cenario"], prazo=info["prazo"], inicio_cenario=time.monotonic(),
-                                  solucoes=0, melhor=None)
-                else:
-                    estado.update(solucoes=info.get("solucoes", 0), melhor=info.get("melhor"))
-
-            def rodar() -> None:
-                try:
-                    etapa5.calcular_cenarios(banco, obra_id, prazos, biblioteca, progresso=progresso, parar=parar)
-                except Exception as exc:  # noqa: BLE001 - mostrado na tela
-                    logging.getLogger("cronograma").exception("Erro no cálculo dos cenários da obra %s", obra_id)
-                    estado["erro"] = str(exc)
-                finally:
-                    estado.update(rodando=False, progresso=1.0)
-
-            estado["thread"] = threading.Thread(target=rodar, daemon=True)
-            calculos[obra_id] = estado
-            estado["thread"].start()
-        return jsonify(_estado_calculo(obra_id))
+    @app.post("/api/obras/<int:obra_id>/cronograma/melhorias/aplicar")
+    def aplicar_melhoria(obra_id):
+        """Aplica uma melhoria nesta obra e recalcula o cenário (mesmo prazo) em segundo plano."""
+        dados = request.get_json(silent=True) or {}
+        with trava_calculos:
+            if (calculos.get(obra_id) or {}).get("rodando"):
+                return _erro("Já há um cálculo em andamento para esta obra.", 409)
+            etapa5.aplicar_melhoria(banco, obra_id, dados.get("acao") or {}, _biblioteca_opcional())
+            prazo = dados.get("prazo_meses")
+            return jsonify(_calcular(obra_id, [float(prazo)] if prazo else None))
 
     @app.post("/api/obras/<int:obra_id>/cronograma/limites")
     def limites_atividade(obra_id):

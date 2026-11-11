@@ -30,6 +30,16 @@
           <span class="selo-tipo aguardar">aguardar</span>
         </span>
       </div>
+      <div class="prazos-espera">
+        <label>Prazos de espera
+          <select id="prazos-espera">
+            <option value="pratica">Prática de obra (padrão)</option>
+            <option value="norma">Norma / caderno de encargos</option>
+          </select>
+        </label>
+        <span class="discreto">Prática: esperas usadas na obra real (coluna depende_de). Norma: prazos da NBR 7200, 13753, 13755 e SUDECAP nas atividades que têm a coluna depende_de_norma (use quando a fiscalização exigir). As atividades com depende_de editado nesta obra não mudam.</span>
+        <p id="msg-prazos" class="mensagem"></p>
+      </div>
       <p class="discreto">As mudanças feitas aqui valem só para esta obra. Para levar uma mudança para as próximas obras, marque "salvar também na biblioteca padrão" (é feita uma cópia de segurança do Excel antes).</p>
     </div>
 
@@ -37,13 +47,13 @@
       <h2>Sequência (ordem de execução possível)</h2>
       <div class="rolagem">
         <table id="tabela-sequencia" class="sequencia">
-          <thead><tr><th>#</th><th>Código</th><th class="desc">Atividade</th><th>Tipo</th><th>Depende de</th><th class="num">Itens</th><th class="num">Total c/ BDI</th><th></th></tr></thead>
+          <thead><tr><th>#</th><th>Código</th><th class="desc">Atividade</th><th>Tipo</th><th>Trocas de função</th><th>Depende de</th><th class="num">Itens</th><th class="num">Total c/ BDI</th><th></th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
       <p class="discreto legenda-deps"><span class="dep herdada">herdada</span> veio de uma atividade que não existe nesta obra ·
         <span class="dep fim">fim</span> atividade sem sucessor, termina antes da limpeza final ·
-        <span class="dep usuario">editada</span> alterada nesta obra · <b>+3d</b> = esperar 3 dias corridos · <b>+3du</b> = 3 dias úteis · <b>:II</b> = início-início (começa depois do início da outra e não termina antes dela)</p>
+        <span class="dep usuario">editada</span> alterada nesta obra · <span class="selo-norma">norma</span> dependências com os prazos de norma · <b>+3d</b> = esperar 3 dias corridos · <b>+3du</b> = 3 dias úteis · <b>:II</b> = início-início (começa depois do início da outra e não termina antes dela)</p>
     </section>
 
     <section class="cartao">

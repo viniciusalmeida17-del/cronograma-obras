@@ -143,7 +143,9 @@ def test_tabela_tem_uma_linha_por_prazo(comparacao):
     doze = _cenario(comparacao, 12.0)
     assert doze["situacao"] in ("otimo", "melhor_encontrado") and doze["principal"]
     assert doze["melhor_resultado"] and doze["diferenca"] == 0
-    assert doze["custo_total"] == pytest.approx(doze["custo_mao_de_obra"] + doze["custo_indiretos"], abs=0.05)
+    # item 6: o custo de saída e volta de equipe entra no custo real, como linha separada
+    assert doze["custo_total"] == pytest.approx(doze["custo_mao_de_obra"] + doze["custo_indiretos"]
+                                                + doze["custo_saida_volta"], abs=0.05)
     assert doze["resultado"] == pytest.approx(doze["receita_variavel"] - doze["custo_total"], abs=0.05)
 
 

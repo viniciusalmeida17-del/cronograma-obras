@@ -34,6 +34,27 @@ def _teto(x: float) -> int:
     return math.ceil(round(x, 6))
 
 
+def trocar_horas(horas: Mapping[str, float], trocas: Iterable[tuple[str, str]]) -> tuple[dict[str, float], list[dict[str, Any]]]:
+    """Passa as horas de cada função de origem para a de destino (as horas não mudam; somam se o destino já existe).
+
+    Devolve as horas novas e as trocas aplicadas [{origem, destino, horas}] (só as que tinham horas).
+    """
+    mapa = dict(trocas)
+    res: dict[str, float] = {}
+    aplicadas = []
+    for f, h in horas.items():
+        destino = mapa.get(f, f)
+        res[destino] = res.get(destino, 0.0) + h
+        if destino != f and h > 0:
+            aplicadas.append({"origem": f, "destino": destino, "horas": round(h, 2)})
+    return res, aplicadas
+
+
+def destino_final(funcao: str, trocas: Iterable[tuple[str, str]], juntar: Mapping[str, str]) -> str:
+    """Função que fica com as horas de `funcao` depois de trocar e juntar."""
+    return next(iter(juntar_horas({dict(trocas).get(funcao, funcao): 1.0}, juntar)))
+
+
 def calcular_duracao(
     horas_ajustadas: Mapping[str, float],
     horas_equipamento: Mapping[str, float],
@@ -41,10 +62,11 @@ def calcular_duracao(
     horas_dia: float,
     maquinas: Mapping[str, int] | None = None,
     dias_minimos: int | None = None,
+    principal: str | None = None,
 ) -> dict[str, Any] | None:
     """Duração (dias úteis) com a equipe padrão. None se não houver horas.
 
-    Função principal = a de mais horas; ela recebe `equipe_padrao` pessoas; cada outra função
+    Função principal = a de mais horas (ou `principal`, se informada e com horas); ela recebe `equipe_padrao` pessoas; cada outra função
     recebe teto(equipe_padrao × horas da função ÷ horas da principal), mínimo 1.
     Duração = maior entre as funções (horas ÷ (pessoas × horas/dia)) e os equipamentos
     (horas ÷ (máquinas × horas/dia); padrão 1 máquina de cada), arredondada para cima.
@@ -57,7 +79,8 @@ def calcular_duracao(
     dias_funcao: dict[str, float] = {}
     principal = None
     if horas:
-        principal = max(horas, key=lambda f: (horas[f], f))
+        if principal not in horas:
+            principal = max(horas, key=lambda f: (horas[f], f))
         hp = horas[principal]
         for f, h in horas.items():
             equipe[f] = equipe_padrao if f == principal else max(1, _teto(equipe_padrao * h / hp))
@@ -96,6 +119,13 @@ def semanas_do_prazo(valor: float | None, unidade: str | None) -> float | None:
         return None
     fator = {"meses": SEMANAS_POR_MES, "semanas": 1.0, "dias": 1 / 7, "anos": 52.0}.get(unidade or "meses")
     return valor * fator if fator else None
+
+
+def trocas_da_atividade(ativ: Mapping[str, Any]) -> list[tuple[str, str]]:
+    """trocar_funcoes da cópia da atividade na obra ('Pintor > Servente; ...')."""
+    from atividades.biblioteca import interpretar_trocas
+
+    return interpretar_trocas(ativ.get("trocar_funcoes"))[0]
 
 
 # --------------------------------------------------------------------------- estimativas
@@ -254,14 +284,26 @@ def calcular_obra(
                 equip[e] += h * qtd
             custo_por_origem[a["origem"]] += s.get("total") or 0.0
             custo_origem_ativ[a["origem"]] += s.get("total") or 0.0
-        brutas = defaultdict(float, juntar_horas(dict(brutas), params.get("juntar") or {}))
+        juntar = params.get("juntar") or {}
+        # ordem (item 6): composição → funcoes.xlsx → trocar_funcoes da atividade → juntar funções
+        trocas = trocas_da_atividade(ativ) if ex.get("execucao") == PROPRIA else []
+        principal_forcada = None
+        trocas_aplicadas: list[dict[str, Any]] = []
+        if trocas:
+            antes = juntar_horas(dict(brutas), juntar)
+            principal_antes = max(antes, key=lambda f: (antes[f], f)) if any(v > 0 for v in antes.values()) else None
+            brutas, trocas_aplicadas = trocar_horas(dict(brutas), trocas)
+            if principal_antes in dict(trocas):
+                # a função principal foi trocada: a de destino passa a ser a principal (equipe padrão e máxima)
+                principal_forcada = destino_final(principal_antes, trocas, juntar)
+        brutas = defaultdict(float, juntar_horas(dict(brutas), juntar))
         rendimento = ex.get("rendimento") or params["rendimento"]
         ajustadas = {f: h / rendimento for f, h in brutas.items()}
         equipe_padrao = int(ex.get("equipe_padrao") or ativ.get("equipe_padrao") or EQUIPE_PADRAO)
         volume = sum((s.get("quantidade") or 0.0) for s in servs if unidade_canonica(s.get("unidade")) == "M3")
         minimo = (dias_concretagem(volume, params["volume_caminhao"], params["caminhoes_dia"])
                   if ativ.get("tipo_producao") == CONCRETAGEM else None)
-        calc = calcular_duracao(ajustadas, equip, equipe_padrao, hd, ex.get("maquinas"), minimo)
+        calc = calcular_duracao(ajustadas, equip, equipe_padrao, hd, ex.get("maquinas"), minimo, principal_forcada)
         execucao_escolhida = ex.get("execucao")
 
         if ex.get("duracao_manual"):
@@ -291,6 +333,9 @@ def calcular_obra(
             "n_itens": len(servs),
             "total": round(sum(s.get("total") or 0 for s in servs), 2),
             "horas_brutas": {f: round(h, 2) for f, h in sorted(brutas.items(), key=lambda x: -x[1])},
+            "trocar_funcoes": ativ.get("trocar_funcoes") or "",
+            "trocar_funcoes_biblioteca": ativ.get("trocar_funcoes_biblioteca") or "",
+            "trocas_aplicadas": trocas_aplicadas,
             "horas_ajustadas": {f: round(h, 2) for f, h in sorted(ajustadas.items(), key=lambda x: -x[1])},
             "horas_por_origem": {o: round(h, 2) for o, h in por_origem.items() if h},
             "custo_por_origem": {o: round(c, 2) for o, c in custo_origem_ativ.items() if c},

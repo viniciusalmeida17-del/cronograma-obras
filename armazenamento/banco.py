@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS obras (
     colunas             TEXT,            -- mapeamento JSON campo -> letra
     data_importacao     TEXT,
     arquivo_salvo       TEXT,            -- cópia do .xlsx (etapa 4 lê as composições dele)
-    composicoes_abas    TEXT             -- JSON: abas onde foram achadas composições
+    composicoes_abas    TEXT,            -- JSON: abas onde foram achadas composições
+    prazos_espera       TEXT             -- item 6: pratica (padrão) ou norma
 );
 
 CREATE TABLE IF NOT EXISTS grupos (
@@ -102,6 +103,11 @@ CREATE TABLE IF NOT EXISTS obra_atividades (
     equipe_max            INTEGER,
     duracao_fixa_dias     INTEGER,
     tipo_producao         TEXT,
+    trocar_funcoes        TEXT,            -- item 6: 'Pintor > Servente; ...' desta obra
+    trocar_funcoes_biblioteca TEXT,        -- o que veio da biblioteca (para mostrar o que mudou)
+    fonte                 TEXT,            -- origem do tipo e das esperas (informativa)
+    deps_prazos           TEXT,            -- JSON {pratica: [...], norma: [...]} nas atividades em que mudam
+    deps_editadas         INTEGER DEFAULT 0, -- depende_de editado nesta obra (vale nas duas opções)
     PRIMARY KEY (obra_id, codigo)
 );
 
@@ -129,24 +135,36 @@ COLUNAS_OBRA_ATIVIDADE = (
     "codigo", "nome", "etapa", "tipo", "tipo_biblioteca", "total_bdi", "total", "n_itens",
     "periodo_de", "periodo_ate", "equipe_principal", "observacao", "ordem_biblioteca", "editada",
     "execucao_padrao", "equipe_padrao", "equipe_max", "duracao_fixa_dias", "tipo_producao",
+    "trocar_funcoes", "trocar_funcoes_biblioteca", "fonte", "deps_prazos", "deps_editadas",
 )
 # Colunas acrescentadas depois da etapa 2 (migração de bancos antigos)
 MIGRACOES = {
     "servicos": {"status_ligacao": "TEXT", "regra_usada": "INTEGER", "origem_horas": "TEXT"},
-    "obras": {"arquivo_salvo": "TEXT", "composicoes_abas": "TEXT"},
+    "obras": {"arquivo_salvo": "TEXT", "composicoes_abas": "TEXT", "prazos_espera": "TEXT"},
     "atividade_resumo": {"maquinas": "TEXT"},
     "atividade_execucao": {"equipe_travada": "INTEGER", "producao_dia": "REAL", "maquinas_max": "INTEGER"},
     "obra_parametros": {"volume_caminhao": "REAL", "caminhoes_dia": "REAL", "juntar": "TEXT"},
     "obra_calendario": {"transferiveis": "TEXT", "min_semanas_reducao": "INTEGER", "custo_troca": "REAL",
                         "salarios": "TEXT", "encargos": "REAL", "indiretos_reais": "TEXT", "terceirizados": "TEXT",
-                        "criterios": "TEXT", "maquinas_max": "INTEGER", "dividir_terceirizadas": "INTEGER"},
-    "cenarios": {"receita_variavel": "REAL", "resultado": "REAL"},
+                        "criterios": "TEXT", "maquinas_max": "INTEGER", "dividir_terceirizadas": "INTEGER",
+                        "entradas": "TEXT", "custo_troca_tipo": "TEXT", "custo_troca_horas": "REAL"},
+    "cenarios": {"receita_variavel": "REAL", "resultado": "REAL", "custo_saida_volta": "REAL"},
     "cenario_atividades": {"maquinas": "TEXT", "partes": "TEXT"},
     "cenario_equipe_semana": {"horas_feriado": "REAL"},
     "obra_atividades": {"execucao_padrao": "TEXT", "equipe_padrao": "INTEGER", "equipe_max": "INTEGER",
-                        "duracao_fixa_dias": "INTEGER", "tipo_producao": "TEXT"},
+                        "duracao_fixa_dias": "INTEGER", "tipo_producao": "TEXT", "trocar_funcoes": "TEXT",
+                        "trocar_funcoes_biblioteca": "TEXT", "fonte": "TEXT", "deps_prazos": "TEXT",
+                        "deps_editadas": "INTEGER DEFAULT 0"},
     "obra_dependencias": {"tipo": "TEXT NOT NULL DEFAULT 'TI'", "unidade": "TEXT NOT NULL DEFAULT 'd'"},
 }
+def _coluna_atividade(a: dict[str, Any], c: str) -> Any:
+    if c in ("editada", "deps_editadas"):
+        return int(bool(a.get(c)))
+    if c == "deps_prazos":
+        return json.dumps(a[c], ensure_ascii=False) if a.get(c) else None
+    return a.get(c)
+
+
 COLUNAS_GRUPO = ("linha_excel", "item", "descricao", "item_pai", "total_planilha", "total_bdi_planilha")
 
 
@@ -296,7 +314,7 @@ class Banco(MaoDeObraMixin, CronogramaMixin):
             con.execute("DELETE FROM obra_atividades WHERE obra_id = ?", (obra_id,))
             con.executemany(
                 f"INSERT INTO obra_atividades (obra_id, {', '.join(COLUNAS_OBRA_ATIVIDADE)}) VALUES (?{', ?' * len(COLUNAS_OBRA_ATIVIDADE)})",
-                [(obra_id, *(int(a[c]) if c == "editada" else a.get(c) for c in COLUNAS_OBRA_ATIVIDADE)) for a in rede["atividades"].values()],
+                [(obra_id, *(_coluna_atividade(a, c) for c in COLUNAS_OBRA_ATIVIDADE)) for a in rede["atividades"].values()],
             )
             con.executemany(
                 "INSERT INTO obra_dependencias (obra_id, atividade, depende_de, espera_dias, tipo, unidade, origem)"
@@ -306,7 +324,7 @@ class Banco(MaoDeObraMixin, CronogramaMixin):
             )
 
     def atualizar_atividade_obra(self, obra_id: int, codigo: str, **campos: Any) -> None:
-        validos = {k: v for k, v in campos.items() if k in ("equipe_max", "equipe_padrao", "tipo_producao")}
+        validos = {k: v for k, v in campos.items() if k in ("equipe_max", "equipe_padrao", "tipo_producao", "trocar_funcoes")}
         if not validos:
             return
         with closing(self._conectar()) as con, con:
@@ -324,10 +342,21 @@ class Banco(MaoDeObraMixin, CronogramaMixin):
             a = dict(a)
             a.pop("obra_id")
             a["editada"] = bool(a["editada"])
+            a["deps_editadas"] = bool(a.get("deps_editadas"))
+            a["deps_prazos"] = json.loads(a["deps_prazos"]) if a.get("deps_prazos") else None
             atividades[a["codigo"]] = a
         dependencias = [{k: d[k] for k in ("atividade", "depende_de", "espera_dias", "tipo", "unidade", "origem")}
                         for d in deps]
         return {"atividades": atividades, "dependencias": dependencias}
+
+    def prazos_espera(self, obra_id: int) -> str:
+        with closing(self._conectar()) as con:
+            r = con.execute("SELECT prazos_espera FROM obras WHERE id = ?", (obra_id,)).fetchone()
+        return (r["prazos_espera"] if r else None) or "pratica"
+
+    def gravar_prazos_espera(self, obra_id: int, prazos: str) -> None:
+        with closing(self._conectar()) as con, con:
+            con.execute("UPDATE obras SET prazos_espera = ? WHERE id = ?", (prazos, obra_id))
 
     def excluir_obra(self, obra_id: int) -> None:
         with closing(self._conectar()) as con, con:
