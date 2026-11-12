@@ -24,6 +24,7 @@ from .agenda import (
     agendar_no_prazo,  # noqa: F401
     busca_local,
     caminho_critico,
+    canteiro_conta_terceirizados,
     contratados_minimos,
     horas_pagas_semana,
     resumir,
@@ -327,6 +328,44 @@ def otimizar(
     if inst.max_total is not None and inst.funcoes:
         for w in range(n_semanas):
             m.Add(sum(C[f][w] for f in inst.funcoes) <= inst.max_total)
+    if canteiro_conta_terceirizados(inst):
+        # limite do canteiro (item 7): em cada dia útil, próprios contratados na semana + terceirizados em andamento
+        ivs_c, dem_c = [], []
+        for cod in inst.ordem:
+            t = inst.tarefas[cod]
+            if not t.rotulo_terceirizado():
+                continue
+            pk = [t.pessoas_terceirizado(k) for k in range(len(t.modos))]
+            if max(pk) <= 0:
+                continue
+            if len(set(pk)) == 1:
+                dem = pk[0]
+            else:
+                dem = m.NewIntVar(min(pk), max(pk), f"tp_{cod}")
+                m.Add(dem == sum(p * xv for p, xv in zip(pk, x[cod])))
+            if cod in partes_var:
+                for k, (pres, st, ln) in enumerate(partes_var[cod]):
+                    fim_p = m.NewIntVar(0, 2 * H + 1, f"tce_{cod}_{k}")
+                    m.Add(fim_p == st + ln)
+                    if k == 0:
+                        iv = m.NewIntervalVar(st, ln, fim_p, f"tc_{cod}_{k}")
+                    else:
+                        iv = m.NewOptionalIntervalVar(st, ln, fim_p, pres, f"tc_{cod}_{k}")
+                    ivs_c.append(iv)
+                    dem_c.append(dem)
+            else:
+                tam = m.NewIntVar(1, H, f"tcl_{cod}")
+                m.Add(tam == ev[cod] - s[cod] + 1)
+                ivs_c.append(m.NewIntervalVar(s[cod], tam, ev[cod] + 1, f"tc_{cod}"))
+                dem_c.append(dem)
+        if ivs_c:
+            if inst.funcoes:
+                for w, (i0, i1) in semanas_ini.items():
+                    tot = m.NewIntVar(0, inst.max_total, f"tot_{w}")
+                    m.Add(tot == sum(C[f][w] for f in inst.funcoes))
+                    ivs_c.append(m.NewFixedSizeIntervalVar(i0, i1 - i0 + 1, f"tcs_{w}"))
+                    dem_c.append(tot)
+            m.AddCumulative(ivs_c, dem_c, inst.max_total)
 
     # indiretos que variam com o prazo e desempate (terminar mais cedo)
     fim_obra = m.NewIntVar(0, lim, "fim_obra")
@@ -395,7 +434,9 @@ def otimizar(
     elif status == cp_model.INFEASIBLE:
         return {"situacao": IMPOSSIVEL, "menor_prazo": {k: v for k, v in rapido.items() if k != "solucao"},
                 "segundos": segundos,
-                "mensagem": "Não há cronograma que respeite todas as restrições (prazo, rígidas e máximos de pessoas)."}
+                "mensagem": "Não há cronograma que respeite todas as restrições (prazo, rígidas e máximos de pessoas"
+                            + (", com os terceirizados no máximo do canteiro" if canteiro_conta_terceirizados(inst)
+                               else "") + ")."}
     elif inicial_valida:
         res = av_inicial
         res["situacao"] = MELHOR

@@ -43,7 +43,9 @@
           <small>A rígida começa até este número de dias úteis depois de liberada.</small></label>
         <label>Tempo limite por cenário (s) <input type="number" name="tempo_limite" min="5" max="3600" step="5"></label>
         <label>Máximo de pessoas no canteiro <input type="number" name="max_pessoas_total" min="1" step="1" placeholder="sem limite">
-          <small>Opcional: soma dos próprios de todas as funções.</small></label>
+          <small>Opcional: soma dos próprios de todas as funções (e dos terceirizados, com a opção abaixo).</small></label>
+        <label class="inline"><input type="checkbox" name="contar_terceirizados"> Contar terceirizados no limite do canteiro
+          <small>(em cada dia: próprios contratados na semana + terceirizados em andamento ≤ máximo)</small></label>
         <label>Máquinas de cada equipamento (máx.) <input type="number" name="maquinas_max" min="1" max="50" step="1">
           <small>O otimizador escolhe de 1 até este número (padrão 6); dá para mudar por atividade abaixo. Em atividade própria, cada máquina traz 1 operador/motorista.</small></label>
         <label class="inline"><input type="checkbox" name="dividir_terceirizadas"> Terceirizadas podem ser feitas em até 3 partes (mínimo de 5 dias úteis cada)</label>
@@ -123,7 +125,7 @@
       <div class="rolagem">
         <table class="simples comparacao" id="tabela-cenarios">
           <thead><tr>
-            <th>Prazo / término</th><th class="num">Pico de pessoas</th><th class="num">Homem-semana pago</th>
+            <th>Prazo / término</th><th class="num">Pico de próprios</th><th class="num">Pico total na obra</th><th class="num">Homem-semana pago</th>
             <th class="num">Ociosidade</th><th class="num">Receita que varia com o prazo</th><th class="num">Custo real que varia com o prazo</th>
             <th class="num">Resultado</th><th class="num">Diferença p/ o principal</th><th>Situação</th>
           </tr></thead>
@@ -156,7 +158,8 @@
     <section class="cartao aba" id="aba-equipe" hidden>
       <div class="acoes-linha"><label>Cenário <select class="sel-cenario"></select></label><span class="espaco"></span>
         <a id="link-excel" class="botao">Exportar para Excel</a></div>
-      <h3>Pessoas contratadas por semana (próprios)</h3>
+      <div class="acoes-linha"><h3>Pessoas por semana (próprios e terceirizados)</h3><span class="espaco"></span>
+        <label class="inline"><input type="checkbox" id="mostrar-terceirizados" checked> Mostrar terceirizados</label></div>
       <div class="legenda" id="legenda-equipe"></div>
       <div id="grafico-equipe" class="grafico-equipe"></div>
       <h3>Ociosidade por função</h3>
@@ -172,6 +175,11 @@
         <div class="acoes-linha"><label>Cenário <select class="sel-cenario"></select></label></div>
         <div class="numeros" id="numeros-resumo"></div>
         <p class="discreto">Resultado da parte que varia com o prazo, não o lucro total da obra.</p>
+      </div>
+      <div class="cartao">
+        <h3>Pessoas na obra (próprios + terceirizados)</h3>
+        <p class="discreto">Informativo, para o canteiro e as áreas de vivência: a contagem dos terceirizados não entra no custo nem na ociosidade.</p>
+        <div id="resumo-terceirizados"></div>
       </div>
       <div class="cartao"><h2>As 3 maiores causas de ociosidade</h2><div id="causas"></div></div>
       <div class="cartao" id="cartao-continuidade"><h2>Continuidade de equipe</h2>

@@ -101,6 +101,9 @@ class Atividade:
     trocar_funcoes: list[tuple[str, str]] = field(default_factory=list)   # (origem, destino) mantendo as horas
     fonte: str | None = None                                              # só informativa
     depende_de_norma: list[Dependencia] | None = None                     # None = igual ao depende_de
+    # item 7 (colunas opcionais): terceirizado na contagem de pessoas
+    rotulo_terceirizado: str | None = None     # "Telhado" → "Telhado (terceirizado)"; vazio = função principal
+    pessoas_terceirizado: int | None = None    # estimativa de pessoas quando não há horas na composição
 
     def dependencias(self, prazos: str = PRATICA) -> list[Dependencia]:
         """depende_de da opção de prazos de espera (norma só onde a coluna depende_de_norma estiver preenchida)."""
@@ -122,6 +125,7 @@ class Atividade:
             "linha_excel": self.linha_excel, "ordem": self.ordem,
             "trocar_funcoes": formatar_trocas(self.trocar_funcoes), "fonte": self.fonte,
             "depende_de_norma": formatar_dependencias(self.depende_de_norma) if self.depende_de_norma is not None else None,
+            "rotulo_terceirizado": self.rotulo_terceirizado, "pessoas_terceirizado": self.pessoas_terceirizado,
         }
 
 
@@ -372,6 +376,16 @@ def _ler_atividades(ws, erros, funcoes: list[str] | None = None) -> dict[str, At
             except ValueError:
                 erros.append({"aba": ABA_ATIVIDADES, "linha": n, "mensagem": f"{codigo}: {campo} '{bruto}' inválido (número inteiro ≥ {minimo})."})
                 numeros[campo] = padrao
+        pessoas_terc = None
+        bruto = opcional("pessoas_terceirizado")
+        if bruto is not None and str(bruto).strip():
+            try:
+                v = float(str(bruto).replace(",", "."))
+                if v != int(v) or v < 0:
+                    raise ValueError
+                pessoas_terc = int(v) or None
+            except ValueError:
+                erros.append({"aba": ABA_ATIVIDADES, "linha": n, "mensagem": f"{codigo}: pessoas_terceirizado '{bruto}' inválido (número inteiro ≥ 0)."})
         tipo_producao = (_texto(opcional("tipo_producao")) or "").lower() or None
         if tipo_producao and tipo_producao not in TIPOS_PRODUCAO:
             erros.append({"aba": ABA_ATIVIDADES, "linha": n, "mensagem": f"{codigo}: tipo_producao '{tipo_producao}' inválido (use {', '.join(TIPOS_PRODUCAO)} ou deixe vazio)."})
@@ -387,6 +401,7 @@ def _ler_atividades(ws, erros, funcoes: list[str] | None = None) -> dict[str, At
             linha_excel=n, ordem=len(atividades),
             execucao_padrao=execucao, tipo_producao=tipo_producao, **numeros,
             trocar_funcoes=trocas, fonte=_texto(opcional("fonte")), depende_de_norma=deps_norma,
+            rotulo_terceirizado=_texto(opcional("rotulo_terceirizado")), pessoas_terceirizado=pessoas_terc,
         )
     return atividades
 
@@ -460,7 +475,7 @@ def _validar(atividades: dict[str, Atividade], regras: list[Regra], erros: list[
 
 def salvar_atividade_na_biblioteca(
     codigo: str, tipo: str | None, depende_de: list[Dependencia] | None, caminho: str | os.PathLike | None = None,
-    trocar_funcoes: list[tuple[str, str]] | None = None,
+    trocar_funcoes: list[tuple[str, str]] | None = None, rotulo_terceirizado: Any = _NAO_INFORMADO,
 ) -> Path:
     """Grava tipo, depende_de e trocar_funcoes de uma atividade no Excel da biblioteca (None mantém o atual).
 
@@ -501,5 +516,10 @@ def salvar_atividade_na_biblioteca(
             cab["trocar_funcoes"] = ws.max_column
             ws.cell(1, ws.max_column + 1).value = "trocar_funcoes"
         ws.cell(linha, cab["trocar_funcoes"] + 1).value = formatar_trocas(trocar_funcoes) or None
+    if rotulo_terceirizado is not _NAO_INFORMADO:
+        if "rotulo_terceirizado" not in cab:
+            cab["rotulo_terceirizado"] = ws.max_column
+            ws.cell(1, ws.max_column + 1).value = "rotulo_terceirizado"
+        ws.cell(linha, cab["rotulo_terceirizado"] + 1).value = _texto(rotulo_terceirizado)
     wb.save(caminho)
     return backup

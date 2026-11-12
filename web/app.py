@@ -355,6 +355,24 @@ def criar_app(
                                              bool(dados.get("salvar_biblioteca")), caminho_biblioteca,
                                              _biblioteca_opcional()))
 
+    @app.post("/api/obras/<int:obra_id>/atividade/<codigo>/terceirizado")
+    def terceirizado_atividade(obra_id, codigo):
+        """Nome e pessoas do terceirizado (item 7). Refaz só a contagem dos cenários já calculados."""
+        dados = request.get_json(silent=True) or {}
+        campos = {}
+        if "rotulo_terceirizado" in dados:
+            campos["rotulo"] = dados["rotulo_terceirizado"]
+        if "pessoas_terceirizado" in dados:
+            campos["pessoas"] = dados["pessoas_terceirizado"]
+        estado = etapa4.definir_terceirizado(banco, obra_id, codigo, salvar_biblioteca=bool(dados.get("salvar_biblioteca")),
+                                             caminho_biblioteca=caminho_biblioteca, biblioteca=_biblioteca_opcional(),
+                                             **campos)
+        try:
+            estado["contagem"] = etapa5.recontar_terceirizados(banco, obra_id, _biblioteca_opcional())
+        except etapa5.ErroCronograma:
+            estado["contagem"] = {"recontados": 0, "precisa_recalcular": False}
+        return jsonify(estado)
+
     @app.post("/api/obras/<int:obra_id>/servico/<int:servico_id>/horas")
     def horas_servico(obra_id, servico_id):
         dados = request.get_json(silent=True) or {}

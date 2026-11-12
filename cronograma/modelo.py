@@ -109,6 +109,7 @@ class Tarefa:
     maquinas_max: int | None = None
     partes_max: int = 1                      # terceirizada: até PARTES_MAX partes
     parte_min: int = PARTE_MIN
+    terceirizado: dict[str, Any] | None = None   # item 7: {rotulo, pessoas, origem, por_modo, detalhe}
 
     def __post_init__(self) -> None:
         self.deps = [d if isinstance(d, Elo) else Elo(*d) for d in self.deps]
@@ -124,6 +125,30 @@ class Tarefa:
     def equipe_propria(self, modo: int) -> dict[str, int]:
         m = self.modos[modo]
         return dict(m.equipe) if self.propria and not m.corridos else {}
+
+    def rotulo_terceirizado(self) -> str | None:
+        if self.propria or not self.terceirizado:
+            return None
+        return self.terceirizado.get("rotulo") or self.funcao_principal or self.nome or self.codigo
+
+    def pessoas_terceirizado(self, modo: int) -> int:
+        """Pessoas do terceirizado na obra enquanto a atividade acontece (0 se própria ou sem estimativa).
+        Com horas na composição (por_modo), é a equipe do modo escolhido."""
+        if self.propria or not self.terceirizado:
+            return 0
+        t = self.terceirizado
+        if t.get("por_modo"):
+            m = self.modos[modo]
+            if m.equipe:
+                return sum(m.equipe.values())
+        return int(t.get("pessoas") or 0)
+
+    def detalhe_terceirizado(self, modo: int) -> dict[str, int]:
+        if self.propria or not self.terceirizado:
+            return {}
+        if self.terceirizado.get("por_modo") and self.modos[modo].equipe:
+            return dict(self.modos[modo].equipe)
+        return dict(self.terceirizado.get("detalhe") or {})
 
     def pode_dividir(self) -> bool:
         return self.partes_max > 1 and not any(m.corridos for m in self.modos)
@@ -259,6 +284,7 @@ def tarefas_da_obra(
             ordem=a.get("ordem_biblioteca", 0), travada=travadas.get(cod), funcao_principal=a.get("funcao_principal"),
             equipe_max=a.get("equipe_max") or EQUIPE_MAX, maquinas_max=maq_max,
             partes_max=PARTES_MAX if (execucao == TERCEIRIZADA and dividir_terceirizadas) else 1,
+            terceirizado=dict(a["terceirizado"]) if execucao == TERCEIRIZADA and a.get("terceirizado") else None,
         )
     for d in dependencias:
         if d["atividade"] in tarefas and d["depende_de"] in tarefas:

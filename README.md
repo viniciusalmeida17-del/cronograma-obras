@@ -103,12 +103,12 @@ a pasta `arquivos_obras/` fica ao lado do banco),
 | `cronograma/` | Etapa 5, sem dependência da interface. |
 | `  calendario.py` | Dias úteis (5 ou 6 por semana), feriados nacionais fixos e móveis (Páscoa), feriados locais, jornada por semana. |
 | `  modelo.py` | Tarefas e modos (1 até `equipe_max` da função principal; as outras na proporção; modos sem ganho de prazo são retirados). |
-| `  agenda.py` | Solução inicial (busca local), caminho crítico, folgas, equipe por semana (uma entrada, até N entradas ou livre), custo de saída e volta, relatório de continuidade, custos e a verificação de todas as restrições. |
-| `  otimizador.py` | Modelo CP-SAT: início e modo de cada atividade, contratados por função e semana, sobe-e-desce, prazo, máximos. |
+| `  agenda.py` | Solução inicial (busca local), caminho crítico, folgas, equipe por semana (uma entrada, até N entradas ou livre), custo de saída e volta, relatório de continuidade, terceirizados por semana e total na obra, estimativa com o limite do canteiro, custos e a verificação de todas as restrições. |
+| `  otimizador.py` | Modelo CP-SAT: início e modo de cada atividade, contratados por função e semana, sobe-e-desce, prazo, máximos (o do canteiro com os terceirizados, por dia). |
 | `  obra.py` | Aplica a etapa 5 a uma obra do banco: parâmetros, custos por hora, indiretos por tempo, cenários, comparação, Excel. |
 | `  sinapi.py` | (em `mao_de_obra/`) Importa a tabela analítica do SINAPI para o banco de coeficientes. |
 | `dados/` | `biblioteca_atividades.xlsx` (biblioteca padrão), `funcoes.xlsx` (funções e aba Juntar funções), `produtividade_referencia.xlsx` (coeficientes SINAPI pesquisados) e `palavras_subcomposicao.txt` (palavras que indicam serviço), todos editáveis. |
-| `armazenamento/` | SQLite: `obras`, `grupos`, `servicos` (com `atividade_biblioteca`, `status_ligacao`, `regra_usada`), `memoria_ligacoes`, `obra_atividades`, `obra_dependencias` as tabelas da etapa 4 (`armazenamento/banco_etapa4.py`) e as da etapa 5 (`armazenamento/banco_etapa5.py`: `obra_calendario`, `cenarios`, `cenario_atividades`, `cenario_equipe_semana`, `custos_hora_padrao`). Bancos antigos são migrados sozinhos. Uma cópia do .xlsx de cada obra fica em `arquivos_obras/`, ao lado do banco. |
+| `armazenamento/` | SQLite: `obras`, `grupos`, `servicos` (com `atividade_biblioteca`, `status_ligacao`, `regra_usada`), `memoria_ligacoes`, `obra_atividades`, `obra_dependencias` as tabelas da etapa 4 (`armazenamento/banco_etapa4.py`) e as da etapa 5 (`armazenamento/banco_etapa5.py`: `obra_calendario`, `cenarios`, `cenario_atividades`, `cenario_equipe_semana`, `cenario_terceirizados_semana`, `custos_hora_padrao`; `pessoas_terceirizado_padrao` fica quando a obra é excluída). Bancos antigos são migrados sozinhos. Uma cópia do .xlsx de cada obra fica em `arquivos_obras/`, ao lado do banco. |
 | `web/` | Servidor Flask local + telas (HTML/JS puro, sem build). `inicio.py`: caminhos, log, aviso em janela e "o app já está aberto?" (só biblioteca padrão); `atalho.py`: entrada do atalho do Windows; `atualizacao.py`: confere se há versão nova (git fetch) e inicia a atualização. |
 | `windows/` | `criar_atalhos.ps1` (cria os atalhos), `abrir.vbs`, `atualizar.vbs` + `atualizar.ps1`, ícones (`gerar_icones.py` refaz os .ico). |
 | `tests/` | Testes com o arquivo da Concorrência 2/2024 e o CSV esperado em `tests/dados/`. |
@@ -257,7 +257,7 @@ a pasta `arquivos_obras/` fica ao lado do banco),
 Especificação em `ITEM_6_REGRAS_DO_CRONOGRAMA.md`. As obras salvas antes continuam com a própria cópia das atividades;
 a biblioteca nova vale para as próximas importações (o banco ganha as colunas novas sozinho).
 
-- **Biblioteca** (`dados/biblioteca_atividades.xlsx`, 19 colunas, lidas pelo nome do cabeçalho; uma biblioteca sem as
+- **Biblioteca** (`dados/biblioteca_atividades.xlsx`, 19 colunas no item 6 (21 com as do item 7), lidas pelo nome do cabeçalho; uma biblioteca sem as
   colunas novas continua valendo):
   - 9 atividades passaram a **flexíveis** (ELE-05, ELE-06, HID-05, ESQ-02, PIN-03, EST-04, QUA-04, URB-02, ACA-01).
     Critério: rígida = segura outro serviço ou tem motivo técnico para não esperar; flexível = não libera nenhum
@@ -297,3 +297,42 @@ a biblioteca nova vale para as próximas importações (o banco ganha as colunas
   permitir 2 entradas (Operador/Motorista não é trocado: vem com a máquina; a LIM-01 não vira flexível). O cenário é
   recalculado com o mesmo tempo (base justa) e cada teste parte desse cronograma, só com aquela mudança (20 s cada). Mostra só as que melhoram,
   pelo ganho em R$ e em pontos de ociosidade, com **Aplicar nesta obra** (grava e recalcula o cenário).
+
+## Item 7 — terceirizados na contagem de pessoas
+
+Especificação em `ITEM_7_TERCEIRIZADOS_NA_CONTAGEM.md`. A equipe por semana passa a contar também os terceirizados,
+**identificados pelo serviço** (ex.: "Eletricista (terceirizado): 3", "Telhado (terceirizado): 4"), para dimensionar
+o canteiro e as áreas de vivência. **Não muda custo nem ociosidade**: o terceirizado é contrato fechado e a contagem é
+informativa. A única regra nova do otimizador é o limite do canteiro.
+
+- **Biblioteca** (21 colunas, lidas pelo nome; sem as colunas novas continua valendo):
+  - `rotulo_terceirizado`: o nome que aparece como `<nome> (terceirizado)`. Atividades com o mesmo nome são da mesma
+    empresa e somam na semana (ELE-* e SPDA/TEL/INC "Eletricista", HID "Bombeiro", SER-01/02/03 "Serralheria"…).
+    Vazio = função principal da atividade; sem função, o nome da atividade. A IND-03 (topografia) é indireta e fica fora.
+  - `pessoas_terceirizado`: estimativa de prática para quando não há horas na composição (TER-01 5, FUN-01 4, MET-01 6,
+    COB-02 4, QUA-03 4, EXA-01 2, SER 3, ESQ-01 2, ACA-01 2, PEX-04 3, PAV-02 8, SIN-01 3).
+- **Pessoas do terceirizado**, por atividade terceirizada (as que vêm terceirizadas, as "perguntar" escolhidas e as do
+  "Procurar melhorias"), nesta ordem:
+  1. **digitado** nesta obra (tela de mão de obra, detalhe da atividade);
+  2. **composição**: a equipe do modo escolhido pelo otimizador (soma das funções); com a duração digitada (ou pela
+     produção por dia), teto(horas ÷ (dias úteis × horas por dia)) por função;
+  3. **outras obras**: o último valor digitado para a atividade em outra obra (fica quando a obra é excluída);
+  4. **biblioteca** (`pessoas_terceirizado`);
+  5. **sem estimativa**: conta 0, com o aviso "sem estimativa de pessoas: digite na mão de obra" na atividade e no resumo.
+  A origem aparece sempre. Terceirizada dividida em partes conta só nos dias das partes.
+- **Contagem por semana**: para cada nome, o **maior** número de pessoas num dia útil da semana (soma das atividades
+  com o mesmo nome naquele dia). **Total na obra** = próprios contratados + terceirizados. Fica gravada com o cenário
+  (`cenario_terceirizados_semana`), e mudar o nome ou as pessoas na mão de obra refaz só a contagem dos cenários já
+  calculados (sem rodar o otimizador; com o limite do canteiro contando terceirizados, a tela avisa para recalcular).
+- **Telas**: equipe por semana com os terceirizados empilhados acima dos próprios (listrados, contorno tracejado),
+  botão "Mostrar terceirizados", linha do total na obra e dica com as atividades e pessoas de cada uma; tabela
+  semana × função com as linhas `<nome> (terceirizado)` e **Total na obra** (também no Excel exportado). Resumo:
+  pico de próprios, **pico total na obra** (com a semana), pico por terceirizado, homem-semana terceirizado e as
+  atividades sem estimativa. Comparação de cenários: coluna "Pico total na obra". Gantt: "Telhado (terceirizado): 4
+  pessoas (origem)" na dica da barra. Mão de obra: campos "nome do terceirizado" (com "salvar também na biblioteca
+  padrão", cópia de segurança antes) e "pessoas do terceirizado".
+- **Limite do canteiro**: "contar terceirizados no limite do canteiro" (parâmetros do cronograma, **ligado por
+  padrão**): em cada dia útil, próprios contratados na semana + terceirizados em andamento no dia ≤ máximo de pessoas
+  no canteiro; nas terceirizadas com horas, a equipe escolhida pelo otimizador entra na conta. Com o máximo vazio, nada
+  muda. O diagnóstico de prazo sugere "aumentar o máximo de pessoas no canteiro de X para Y reduz N dias úteis"
+  quando esse limite segura o prazo (estimativa com as atividades o mais cedo possível sem passar do máximo).

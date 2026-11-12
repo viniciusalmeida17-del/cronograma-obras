@@ -63,6 +63,7 @@ class Instancia:
     receitas: list[ItemIndireto] = field(default_factory=list)      # receita com critério "mensal"
     entradas: dict[str, int] = field(default_factory=dict)          # função -> 0 (livre) ou até N entradas (padrão 1)
     custo_troca_horas: float = 0.0                                  # horas da própria função por pessoa que sai ou volta
+    contar_terceirizados: bool = True                               # terceirizados contam no máximo do canteiro
 
     def __post_init__(self) -> None:
         if self.final not in self.tarefas:
@@ -587,6 +588,183 @@ def horas_feriado_semana(inst: Instancia, semana: int) -> float:
     return feriados * inst.calendario.horas_semana(semana) / inst.calendario.dias_semana
 
 
+# --------------------------------------------------------------------------- terceirizados na contagem (item 7)
+
+
+def dias_da_tarefa(inst: Instancia, a: Mapping[str, Any]) -> list[tuple[int, int]]:
+    """Trechos (início, dias úteis) em que a tarefa está em andamento (partes, se dividida)."""
+    if a.get("partes"):
+        return [tuple(p) for p in a["partes"]]
+    return [(a["inicio"], max(1, a["ultimo"] - a["inicio"] + 1))]
+
+
+def posicoes_terceirizados(inst: Instancia, sol: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Terceirizadas posicionadas: rótulo, pessoas (do modo escolhido), origem e dias em andamento."""
+    res = []
+    for cod in inst.ordem:
+        t = inst.tarefas[cod]
+        rot = t.rotulo_terceirizado()
+        if not rot or cod not in sol:
+            continue
+        a = sol[cod]
+        info = t.terceirizado or {}
+        res.append({"codigo": cod, "nome": t.nome, "rotulo": rot, "pessoas": t.pessoas_terceirizado(a["modo"]),
+                    "origem": info.get("origem"), "detalhe": t.detalhe_terceirizado(a["modo"]),
+                    "por_modo": bool(info.get("por_modo")), "dias": dias_da_tarefa(inst, a)})
+    return res
+
+
+def terceirizados_por_dia(posicoes: list[dict[str, Any]]) -> dict[int, int]:
+    uso: dict[int, int] = defaultdict(int)
+    for p in posicoes:
+        for ini, d in p["dias"]:
+            for i in range(ini, ini + d):
+                uso[i] += p["pessoas"]
+    return uso
+
+
+def contar_terceirizados(cal: Calendario, posicoes: list[dict[str, Any]], proprios: list[int]) -> dict[str, Any]:
+    """Contagem por semana: para cada terceirizado (rótulo), o maior número de pessoas num dia útil da semana
+    (soma das atividades com o mesmo rótulo em andamento naquele dia). Total na obra = próprios + terceirizados."""
+    n = len(proprios)
+    for p in posicoes:
+        for ini, d in p["dias"]:
+            n = max(n, cal.semana(ini + d - 1) + 1)
+    proprios = list(proprios) + [0] * (n - len(proprios))
+    por_rot_dia: dict[str, dict[int, int]] = defaultdict(lambda: defaultdict(int))
+    ativ_semana: dict[tuple[str, int], dict[str, dict[str, Any]]] = defaultdict(dict)
+    for p in posicoes:
+        for ini, d in p["dias"]:
+            for i in range(ini, ini + d):
+                por_rot_dia[p["rotulo"]][i] += p["pessoas"]
+                ativ_semana[(p["rotulo"], cal.semana(i))][p["codigo"]] = {
+                    "codigo": p["codigo"], "nome": p["nome"], "pessoas": p["pessoas"], "origem": p.get("origem")}
+    series: dict[str, list[int]] = {}
+    for rot, dias in por_rot_dia.items():
+        serie = [0] * n
+        for i, q in dias.items():
+            w = cal.semana(i)
+            serie[w] = max(serie[w], q)
+        series[rot] = serie
+    semanas = []
+    for (rot, w), ativs in sorted(ativ_semana.items(), key=lambda x: (x[0][1], x[0][0])):
+        semanas.append({"semana": cal.segunda(w).isoformat(), "indice": w, "rotulo": rot, "pessoas": series[rot][w],
+                        "atividades": sorted(ativs.values(), key=lambda x: x["codigo"])})
+    terc_semana = [sum(s[w] for s in series.values()) for w in range(n)]
+    total = [proprios[w] + terc_semana[w] for w in range(n)]
+    rotulos = []
+    for rot, serie in series.items():
+        pico = max(serie, default=0)
+        rotulos.append({"rotulo": rot, "nome": f"{rot} (terceirizado)", "pico": pico,
+                        "semana_pico": cal.segunda(serie.index(pico)).isoformat() if pico else None,
+                        "homem_semana": sum(serie), "serie": serie,
+                        "atividades": sorted({p["codigo"] for p in posicoes if p["rotulo"] == rot})})
+    rotulos.sort(key=lambda r: (-r["pico"], r["rotulo"]))
+
+    def pico_de(serie: list[int]) -> tuple[int, str | None]:
+        v = max(serie, default=0)
+        return v, (cal.segunda(serie.index(v)).isoformat() if v else None)
+
+    pico_total, semana_total = pico_de(total)
+    pico_prop, semana_prop = pico_de(proprios)
+    return {
+        "semanas_iso": [cal.segunda(w).isoformat() for w in range(n)],
+        "rotulos": rotulos, "semanas": semanas, "terceirizados_semana": terc_semana,
+        "proprios_semana": proprios, "total_obra": total,
+        "pico_total": pico_total, "semana_pico_total": semana_total,
+        "pico_proprios": pico_prop, "semana_pico_proprios": semana_prop,
+        "pico_terceirizados": max(terc_semana, default=0),
+        "homem_semana_terceirizado": sum(terc_semana),
+        "sem_estimativa": [{"codigo": p["codigo"], "nome": p["nome"], "rotulo": p["rotulo"]}
+                           for p in posicoes if p.get("origem") == "sem estimativa"],
+        "atividades": {p["codigo"]: {k: p.get(k) for k in ("rotulo", "pessoas", "origem", "detalhe", "por_modo")}
+                       for p in posicoes},
+    }
+
+
+def contratados_por_semana_total(contratados: Mapping[str, list[int]], n: int | None = None) -> list[int]:
+    n = n if n is not None else max((len(v) for v in contratados.values()), default=0)
+    return [sum(v[w] for v in contratados.values() if w < len(v)) for w in range(n)]
+
+
+def canteiro_conta_terceirizados(inst: Instancia) -> bool:
+    return inst.max_total is not None and inst.contar_terceirizados and any(
+        t.rotulo_terceirizado() for t in inst.tarefas.values())
+
+
+def agendar_com_canteiro(inst: Instancia, maximo: int, contar_terceirizados: bool | None = None
+                         ) -> dict[str, dict[str, Any]]:
+    """Cada tarefa o mais cedo possível (modo mais rápido que cabe) sem passar do máximo de pessoas no canteiro:
+    em cada dia, maior ocupação de próprios da semana + terceirizados em andamento no dia ≤ máximo.
+    Estimativa para o diagnóstico de prazo (não considera o sobe-e-desce dos contratados)."""
+    cal = inst.calendario
+    contar = inst.contar_terceirizados if contar_terceirizados is None else contar_terceirizados
+    proprio: dict[int, int] = defaultdict(int)
+    terc: dict[int, int] = defaultdict(int)
+    semana_max: dict[int, int] = defaultdict(int)
+    sol: dict[str, dict[str, Any]] = {}
+    limite_busca = inst.horizonte * 3 + 60
+
+    def cabe(a: Mapping[str, Any], p_prop: int, p_terc: int) -> bool:
+        if not p_prop and not p_terc:
+            return True
+        dias = [i for ini, d in dias_da_tarefa(inst, a) for i in range(ini, ini + d)]
+        if p_prop > maximo or p_terc > maximo:
+            return False
+        novo_sem: dict[int, int] = {}
+        for i in dias:
+            w = cal.semana(i)
+            novo_sem[w] = max(novo_sem.get(w, semana_max[w]), proprio[i] + p_prop)
+        for i in dias:
+            if novo_sem[cal.semana(i)] + terc[i] + p_terc > maximo:
+                return False
+        for w, v in novo_sem.items():
+            if v != semana_max[w]:
+                for i in dias_semana(w):
+                    if v + terc[i] > maximo:
+                        return False
+        return True
+
+    cache_semana: dict[int, list[int]] = {}
+
+    def dias_semana(w: int) -> list[int]:
+        if w not in cache_semana:
+            i0 = cal.indice_util(cal.offset_de(cal.segunda(w)))
+            cache_semana[w] = [i for i in range(i0, min(i0 + 7, len(cal.offset))) if cal.semana(i) == w]
+        return cache_semana[w]
+
+    for cod in inst.ordem:
+        t = inst.tarefas[cod]
+        modos = sorted(range(len(t.modos)), key=lambda k: (inst.duracao(cod, k, 0), k))
+        melhor = None
+        for k in modos:
+            p_prop = sum(t.equipe_propria(k).values())
+            p_terc = t.pessoas_terceirizado(k) if contar else 0
+            a = posicionar_cedo(inst, cod, k, sol)
+            s0 = a["inicio"]
+            while not cabe(a, p_prop, p_terc) and a["inicio"] - s0 < limite_busca:
+                try:
+                    a = inst.entrada(cod, k, a["inicio"] + 1)
+                except IndexError:
+                    break
+            if melhor is None or a["fim"] < melhor[0]["fim"]:
+                melhor = (a, p_prop, p_terc)
+        a, p_prop, p_terc = melhor
+        sol[cod] = a
+        for i in (i for ini, d in dias_da_tarefa(inst, a) for i in range(ini, ini + d)):
+            proprio[i] += p_prop
+            terc[i] += p_terc
+            w = cal.semana(i)
+            semana_max[w] = max(semana_max[w], proprio[i])
+    return sol
+
+
+def dias_com_canteiro(inst: Instancia, maximo: int) -> int:
+    """Dias úteis até o término com o máximo do canteiro (estimativa de `agendar_com_canteiro`)."""
+    sol = agendar_com_canteiro(inst, maximo)
+    return inst.calendario.ultimo_util_ate(inst.fim_da_obra(sol)) + 1
+
+
 # --------------------------------------------------------------------------- custos e resumo
 
 
@@ -708,12 +886,19 @@ def resumir(inst: Instancia, sol: Mapping[str, Mapping[str, Any]], contratados: 
             "folga": fl[cod], "critica": cod in critico, "ordem": t.ordem,
             "dependencias": [{"depende_de": e.anterior, "tipo": e.tipo, "espera": e.espera, "unidade": e.unidade}
                              for e in t.deps],
+            "terceirizado": ({**(t.terceirizado or {}), "rotulo": t.rotulo_terceirizado(),
+                              "pessoas": t.pessoas_terceirizado(a["modo"]), "detalhe": t.detalhe_terceirizado(a["modo"]),
+                              "equipe_modo": dict(m.equipe)} if t.rotulo_terceirizado() else None),
         })
     base_ocio = horas_pagas - horas_fer
+    terc = contar_terceirizados(cal, posicoes_terceirizados(inst, sol), contratados_por_semana_total(contratados, n))
     return {
         "termino": cal.data_do_offset(fim_obra).isoformat(),
         "dias_uteis": cal.ultimo_util_ate(fim_obra) + 1,
         "pico": pico,
+        "pico_total": terc["pico_total"],
+        "semana_pico_total": terc["semana_pico_total"],
+        "terceirizados": terc,
         "homem_semana": round(homem_semana, 2),
         "horas_pagas": round(horas_pagas, 2),
         "horas_feriado": round(horas_fer, 2),
@@ -906,4 +1091,13 @@ def verificar(inst: Instancia, sol: Mapping[str, Mapping[str, Any]], contratados
             if tot > inst.max_total:
                 erros.append(f"semana {cal.segunda(s)}: {tot} contratados (máximo {inst.max_total})")
                 break
+        if canteiro_conta_terceirizados(inst):
+            totais = contratados_por_semana_total(contratados)
+            for i, q in sorted(terceirizados_por_dia(posicoes_terceirizados(inst, sol)).items()):
+                w = cal.semana(i)
+                tot = q + (totais[w] if w < len(totais) else 0)
+                if tot > inst.max_total:
+                    erros.append(f"{cal.data(i)}: {tot} pessoas no canteiro com os terceirizados "
+                                 f"(máximo {inst.max_total})")
+                    break
     return erros

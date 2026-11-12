@@ -124,6 +124,7 @@ function desenharParametros() {
   f.max_pessoas_total.value = p.max_pessoas_total ?? "";
   f.maquinas_max.value = p.maquinas_max ?? 6;
   f.dividir_terceirizadas.checked = !!p.dividir_terceirizadas;
+  f.contar_terceirizados.checked = p.contar_terceirizados !== false;
   f.encargos.value = p.encargos;
   f.min_semanas_reducao.value = p.min_semanas_reducao ?? 2;
   f.custo_troca.value = p.custo_troca ?? 0;
@@ -213,6 +214,7 @@ $("#form-parametros").addEventListener("submit", async (e) => {
     data_inicio: f.data_inicio.value, limite_rigidas: f.limite_rigidas.value, tempo_limite: f.tempo_limite.value,
     max_pessoas_total: f.max_pessoas_total.value, feriados_locais: feriados, max_por_funcao: maximos,
     maquinas_max: f.maquinas_max.value, dividir_terceirizadas: f.dividir_terceirizadas.checked,
+    contar_terceirizados: f.contar_terceirizados.checked,
     encargos: f.encargos.value, min_semanas_reducao: f.min_semanas_reducao.value, custo_troca: f.custo_troca.value,
     salarios, terceirizados: terc, criterios,
     custo_troca_tipo: f.custo_troca_tipo.value, custo_troca_horas: f.custo_troca_horas.value,
@@ -257,7 +259,7 @@ function desenharCenarios() {
     if (!ok) {
       const mp = c.menor_prazo || {};
       return `<tr class="impossivel"><td>${prazo}</td>
-        <td colspan="7">${c.situacao === "impossivel" ? `<b>Não cabe em ${fmt2.format(c.prazo_meses)} meses.</b>` : esc(c.mensagem || "")}
+        <td colspan="8">${c.situacao === "impossivel" ? `<b>Não cabe em ${fmt2.format(c.prazo_meses)} meses.</b>` : esc(c.mensagem || "")}
           ${mp.dias_uteis ? ` Menor prazo com os limites atuais: <b>${mp.dias_uteis} dias úteis</b> (${fmt2.format(mp.meses)} meses, término ${dataBR(mp.termino)}).` : ""}
           ${c.diagnostico ? `<button type="button" class="secundario pequeno" data-diag="${c.id}">Ver diagnóstico e sugestões</button>` : ""}</td>
         <td><span class="selo ambiguo">${SITUACAO[c.situacao]}</span></td></tr>`;
@@ -265,7 +267,9 @@ function desenharCenarios() {
     const dif = c.diferenca === null || c.principal ? (c.principal ? "—" : "—") : `${reais(c.diferenca)}<br><small>${fmt2.format(c.diferenca_pct || 0)}%</small>`;
     return `<tr class="${c.melhor_resultado ? "mais-barato" : ""} ${c.escolhido ? "escolhido" : ""}">
       <td>${prazo}<br>término ${dataBR(c.termino)}</td>
-      <td class="num">${c.pico}</td><td class="num">${fmt1.format(c.homem_semana)}</td>
+      <td class="num">${c.pico}</td>
+      <td class="num">${c.pico_total ?? "—"}${c.semana_pico_total ? `<br><small class="discreto">${dataBR(c.semana_pico_total)}</small>` : ""}</td>
+      <td class="num">${fmt1.format(c.homem_semana)}</td>
       <td class="num">${fmt1.format(c.ociosidade)}%</td>
       <td class="num">${reais(c.receita_variavel || 0)}</td><td class="num">${reais(c.custo_total)}</td>
       <td class="num"><b>${reais(c.resultado)}</b></td>
@@ -275,7 +279,7 @@ function desenharCenarios() {
         <small class="discreto">${fmt1.format(c.segundos || 0)} s</small>
         <div class="botoes-cenario">${c.escolhido ? "<b>✔ cronograma da obra</b>" : `<button type="button" class="secundario pequeno" data-escolher="${c.id}">Usar este</button>`}
         <button type="button" class="secundario pequeno" data-ver="${c.id}">Ver</button></div></td></tr>`;
-  }).join("") || `<tr><td colspan="9" class="discreto">Nenhum cenário calculado ainda.</td></tr>`;
+  }).join("") || `<tr><td colspan="10" class="discreto">Nenhum cenário calculado ainda.</td></tr>`;
   const opcoes = cmp.cenarios.filter((c) => c.termino)
     .map((c) => `<option value="${c.id}">${fmt2.format(c.prazo_meses)} meses${c.escolhido ? " (cronograma da obra)" : ""}</option>`).join("");
   $$(".sel-cenario").forEach((s) => { s.innerHTML = opcoes || "<option value=''>— nenhum cenário —</option>"; if (est.cenId) s.value = est.cenId; });
@@ -290,6 +294,8 @@ function desenharDiagnostico(c) {
   $("#diagnostico").innerHTML = `<div class="diagnostico"><h3>Diagnóstico: ${fmt2.format(c.prazo_meses)} meses${c.principal ? " (prazo da licitação)" : ""}</h3>
     <p>Menor prazo possível com os limites atuais: <b>${d.menor_prazo.dias_uteis} dias úteis</b> (término ${dataBR(d.menor_prazo.termino)});
       o prazo tem ${d.dias_uteis_limite} dias úteis. Faltam <b>${d.faltam_dias_uteis}</b> dias úteis.</p>
+    ${d.canteiro ? `<p>Com o máximo de <b>${d.canteiro.maximo}</b> pessoas no canteiro, a estimativa é de <b>${d.canteiro.dias_uteis} dias úteis</b>
+      (sem o limite: ${d.canteiro.sem_limite}): o limite do canteiro está segurando o prazo.</p>` : ""}
     <h4>Sugestões (ganho calculado de verdade, recalculando o caminho crítico)</h4>
     ${d.sugestoes.length ? `<ol class="sugestoes">${d.sugestoes.map((s, i) => `<li>${esc(s.texto)}
       <button type="button" class="secundario pequeno" data-sugestao="${c.id}:${i}">Aplicar e recalcular</button></li>`).join("")}</ol>`
@@ -486,7 +492,9 @@ function desenharGantt() {
       const maq = Object.entries(a.maquinas || {}).map(([e, n]) => `${n}× ${e.slice(0, 40)}`).join("; ");
       const texto = `<b>${esc(a.codigo)}</b> ${esc(a.nome || "")}<br>${dataBR(a.inicio)} a ${dataBR(a.termino)}<br>`
         + `Duração: ${a.duracao} dias ${a.unidade === "corridos" ? "corridos" : "úteis"} · ${ROTULO_BARRA[tipo]}`
-        + (equipe ? `<br>Equipe: ${esc(equipe)}` : a.execucao === "terceirizada" ? "<br>Equipe terceirizada" : "")
+        + (equipe ? `<br>Equipe: ${esc(equipe)}` : a.terceirizado ? `<br>${esc(a.terceirizado.nome || a.terceirizado.rotulo + " (terceirizado)")}: <b>${a.terceirizado.pessoas} pessoa(s)</b> (${esc(a.terceirizado.origem || "")})`
+          + (Object.keys(a.terceirizado.detalhe || {}).length ? `<br><small>${esc(textoEquipe(a.terceirizado.detalhe))}</small>` : "")
+          : a.execucao === "terceirizada" ? "<br>Equipe terceirizada" : "")
         + (maq ? `<br>Máquinas: ${esc(maq)}` : "")
         + (a.partes ? `<br>Em ${a.partes.length} partes: ${a.partes.map((p) => `${dataBR(p.inicio)}–${dataBR(p.termino)}`).join(", ")}` : "")
         + `<br>Folga: ${a.folga} dia(s) útil(eis)` + (a.critica ? "<br><b>Caminho crítico</b>" : "");
@@ -583,6 +591,23 @@ function seriesDoGrafico(c) {
   return series;
 }
 
+// terceirizados: cores próprias (tons terrosos), sempre com listras e contorno tracejado
+const SERIES_TERC = ["#b5651d", "#8a6d3b", "#c0392b", "#7d5ba6", "#2c7873", "#a0522d"];
+const textoEquipe = (eq) => Object.entries(eq || {}).sort((p, q) => q[1] - p[1]).map(([f, n]) => `${n} ${f.toLowerCase()}`).join(" + ");
+
+function seriesTerceirizados(c) {
+  const lista = c.terceirizados || [];
+  const series = lista.slice(0, SERIES_TERC.length).map((t, k) => ({ ...t, cor: SERIES_TERC[k], id: `terc${k}` }));
+  const resto = lista.slice(SERIES_TERC.length);
+  if (resto.length) {
+    const n = c.semanas.length;
+    series.push({ nome: `Outros terceirizados (${resto.length})`, cor: "#a8a49c", id: "terc-outros",
+      pessoas: Array.from({ length: n }, (_, i) => resto.reduce((t, r) => t + (r.pessoas[i] || 0), 0)),
+      atividades: Array.from({ length: n }, (_, i) => resto.flatMap((r) => r.atividades[i] || [])) });
+  }
+  return series;
+}
+
 function desenharEquipe() {
   const c = est.cen;
   const alvo = $("#grafico-equipe");
@@ -592,24 +617,32 @@ function desenharEquipe() {
     ["#tabela-equipe", "#tabela-ociosidade", "#legenda-equipe"].forEach((s) => { $(s).innerHTML = ""; });
     return;
   }
+  const comTerc = $("#mostrar-terceirizados").checked && (c.terceirizados || []).length > 0;
   const series = seriesDoGrafico(c);
+  const tercs = comTerc ? seriesTerceirizados(c) : [];
   $("#legenda-equipe").innerHTML = series.map((s) => `<span><i class="quadrado" style="background:${s.cor}"></i>${esc(s.funcao)}</span>`).join("")
+    + tercs.map((t) => `<span><i class="quadrado terc" style="background:repeating-linear-gradient(45deg, ${t.cor} 0 3px, #fcfcfb 3px 5px);border-color:${t.cor}"></i>${esc(t.nome)}</span>`).join("")
+    + (comTerc ? '<span><i class="linha-total"></i>total na obra</span>' : "")
     + '<span><i class="quadrado parado"></i>parte hachurada = contratado parado (sem contar feriados)</span>';
   const n = c.semanas.length;
-  const maxY = Math.max(1, ...c.total_semana);
+  const totalObra = c.total_obra || c.total_semana;
+  const maxY = Math.max(1, ...(comTerc ? totalObra : c.total_semana));
   const passoY = maxY > 40 ? 10 : maxY > 16 ? 5 : maxY > 8 ? 2 : 1;
   const topoY = Math.ceil(maxY / passoY) * passoY;
   const bw = Math.max(6, Math.min(22, 1000 / n));
   const esq = 34, alto = 260, base = alto - 24, larg = esq + n * bw + 10;
   const y = (v) => base - (v / topoY) * (base - 10);
-  let svg = `<svg width="${larg}" height="${alto}" role="img" aria-label="Pessoas contratadas por semana">
+  let svg = `<svg width="${larg}" height="${alto}" role="img" aria-label="Pessoas por semana: próprios${comTerc ? " e terceirizados" : ""}">
     <defs><pattern id="hachura" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-      <rect width="5" height="5" fill="#fcfcfb" fill-opacity="0.55"/><line x1="0" y1="0" x2="0" y2="5" stroke="#fcfcfb" stroke-width="2"/></pattern></defs>`;
+      <rect width="5" height="5" fill="#fcfcfb" fill-opacity="0.55"/><line x1="0" y1="0" x2="0" y2="5" stroke="#fcfcfb" stroke-width="2"/></pattern>
+      ${tercs.map((t) => `<pattern id="${t.id}" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+        <rect width="5" height="5" fill="#fcfcfb"/><line x1="0" y1="0" x2="0" y2="5" stroke="${t.cor}" stroke-width="3"/></pattern>`).join("")}</defs>`;
   for (let v = 0; v <= topoY; v += passoY) {
     svg += `<line x1="${esq}" x2="${larg - 6}" y1="${y(v)}" y2="${y(v)}" class="grade${v === 0 ? " base" : ""}"/>
       <text x="${esq - 6}" y="${y(v) + 4}" class="eixo" text-anchor="end">${v}</text>`;
   }
   const passoX = Math.ceil(60 / bw);
+  let barrasTerc = "";
   for (let i = 0; i < n; i++) {
     const x0 = esq + i * bw + 1;
     let acc = 0;
@@ -626,9 +659,28 @@ function desenharEquipe() {
       partes.push(`${esc(s.funcao)}: <b>${q}</b> (${Math.round(100 * ocup)}% ocupado)`);
       acc += q;
     }
-    const dicaTxt = `<b>Semana de ${dataBR(c.semanas[i])}</b><br>Total: ${c.total_semana[i]} contratados<br>${partes.reverse().join("<br>")}`;
+    const partesT = [];
+    for (const t of tercs) {
+      const q = t.pessoas[i];
+      if (!q) continue;
+      const y1 = y(acc), y2 = y(acc + q);
+      const ativs = (t.atividades[i] || []).map((a) => `${esc(a.codigo)} ${esc((a.nome || "").slice(0, 40))}: ${a.pessoas}`).join("<br>");
+      const dicaT = `<b>${esc(t.nome)}</b> · semana de ${dataBR(c.semanas[i])}<br><b>${q}</b> pessoa(s) no dia de maior movimento<br>${ativs}`;
+      barrasTerc += `<rect x="${x0 + 0.5}" y="${y2 + 0.5}" width="${bw - 3}" height="${Math.max(0, y1 - y2 - 2)}" fill="url(#${t.id})"
+        stroke="${t.cor}" stroke-dasharray="3 2" data-dica="${esc(dicaT)}"/>`;
+      partesT.push(`${esc(t.nome)}: <b>${q}</b>`);
+      acc += q;
+    }
+    const dicaTxt = `<b>Semana de ${dataBR(c.semanas[i])}</b><br>Próprios: ${c.total_semana[i]} contratados`
+      + (comTerc ? ` · <b>Total na obra: ${totalObra[i]}</b>` : "") + `<br>${partes.reverse().join("<br>")}`
+      + (partesT.length ? `<br>${partesT.reverse().join("<br>")}` : "");
     svg += `<rect x="${x0 - 1}" y="10" width="${bw}" height="${base - 10}" fill="transparent" data-dica="${esc(dicaTxt)}"/>`;
     if (i % passoX === 0) svg += `<text x="${x0 + bw / 2}" y="${alto - 8}" class="eixo" text-anchor="middle">${dataBR(c.semanas[i]).slice(0, 5)}</text>`;
+  }
+  svg += barrasTerc;
+  if (comTerc) {
+    const pts = totalObra.map((v, i) => `${esq + i * bw + bw / 2},${y(v)}`).join(" ");
+    svg += `<polyline points="${pts}" class="linha-total-obra" fill="none"/>`;
   }
   alvo.innerHTML = svg + "</svg>";
 
@@ -645,12 +697,22 @@ function desenharEquipe() {
       <td class="nowrap">${f.pico} <small class="discreto">${dataBR(f.semana_pico)}</small></td><td class="nowrap">${dataBR(f.saida)}</td>
       ${f.contratados.map((v, i) => `<td class="num ${v && f.horas_ocupadas[i] < 0.5 * (f.horas_pagas[i] - (f.horas_feriado[i] || 0)) ? "ocioso" : ""}">${v || ""}</td>`).join("")}</tr>`).join("");
   const total = `<tr class="total"><td>Total próprios</td><td></td><td>${Math.max(...c.total_semana)}</td><td></td>${c.total_semana.map((v) => `<td class="num">${v || ""}</td>`).join("")}</tr>`;
+  const linhasTerc = (c.terceirizados || []).length
+    ? (c.terceirizados || []).map((t) => {
+      const ativas = t.pessoas.map((v, i) => (v ? i : -1)).filter((i) => i >= 0);
+      return `<tr class="terceirizado"><td class="nowrap">${esc(t.nome)}</td><td class="nowrap">${ativas.length ? dataBR(c.semanas[ativas[0]]) : "—"}</td>
+        <td class="nowrap">${t.pico} <small class="discreto">${dataBR(t.semana_pico)}</small></td><td class="nowrap">${ativas.length ? dataBR(c.semanas[ativas[ativas.length - 1]]) : "—"}</td>
+        ${t.pessoas.map((v, i) => `<td class="num" title="${esc((t.atividades[i] || []).map((a) => `${a.codigo}: ${a.pessoas}`).join("\n"))}">${v || ""}</td>`).join("")}</tr>`;
+    }).join("")
+      + `<tr class="total"><td>Total na obra</td><td></td><td class="nowrap">${c.pico_total ?? Math.max(...totalObra)} <small class="discreto">${dataBR(c.semana_pico_total)}</small></td><td></td>${totalObra.map((v) => `<td class="num">${v || ""}</td>`).join("")}</tr>`
+    : "";
   const ind = (c.equipe_indireta || []).length
     ? `<tr class="separador"><td colspan="${4 + n}">Equipe indireta (da mão de obra), à parte dos próprios de produção</td></tr>`
       + c.equipe_indireta.map((e) => `<tr class="indireta"><td>${esc(e.funcao)}</td><td></td><td></td><td></td>${c.semanas.map((_, i) => `<td class="num">${e.pessoas[i] ? fmt2.format(e.pessoas[i]) : ""}</td>`).join("")}</tr>`).join("")
     : "";
-  $("#tabela-equipe").innerHTML = cab + `<tbody>${corpo}${total}${ind}</tbody>`;
+  $("#tabela-equipe").innerHTML = cab + `<tbody>${corpo}${total}${linhasTerc}${ind}</tbody>`;
 }
+$("#mostrar-terceirizados").addEventListener("change", desenharEquipe);
 
 // ------------------------------------------------------------------ 5. Resumo
 
@@ -665,14 +727,15 @@ function desenharResumo() {
   const c = est.cen;
   if (!c) {
     $("#numeros-resumo").innerHTML = SEM_CENARIO;
-    ["#caminho-critico", "#tabela-indiretos", "#tabela-receitas", "#causas", "#tabela-continuidade", "#melhorias"].forEach((s) => { $(s).innerHTML = ""; });
+    ["#caminho-critico", "#tabela-indiretos", "#tabela-receitas", "#causas", "#tabela-continuidade", "#melhorias", "#resumo-terceirizados"].forEach((s) => { $(s).innerHTML = ""; });
     return;
   }
   const caixas = [
     ["Prazo do cenário", `${fmt2.format(c.prazo_meses)} meses (até ${dataBR(c.data_limite)})`],
     ["Término previsto", dataBR(c.termino)],
     ["Dias úteis", c.dias_uteis ?? "—"],
-    ["Pico de pessoas (próprios)", c.pico],
+    ["Pico de pessoas (próprios)", `${c.pico}${c.semana_pico_proprios ? ` <small>(${dataBR(c.semana_pico_proprios)})</small>` : ""}`],
+    ["Pico total na obra (com terceirizados)", c.pico_total != null ? `${c.pico_total} <small>(${dataBR(c.semana_pico_total)})</small>` : "—"],
     ["Homem-semana pago", fmt1.format(c.homem_semana)],
     ["Ociosidade (sem feriados)", fmt1.format(c.ociosidade) + "%"],
     ["Mão de obra própria", reais(c.custo_mao_de_obra)],
@@ -688,10 +751,28 @@ function desenharResumo() {
     ? `<ol>${c.causas_ociosidade.map((x) => `<li><b>${esc(x.funcao)}</b>: ${fmt1.format(x.horas_paradas)} h paradas (${fmt1.format(x.ociosidade)}% da função),
         principalmente nas semanas de ${x.semanas.map(dataBR).join(", ")}</li>`).join("")}</ol>`
     : "<p class='discreto'>Sem horas paradas.</p>";
+  desenharResumoTerceirizados(c);
   desenharContinuidade(c);
   $("#caminho-critico").innerHTML = (c.caminho_critico || []).map((x) => `<b>${esc(x)}</b>`).join(" → ");
   $("#tabela-indiretos").innerHTML = linhasPeriodo((c.indiretos || []).filter((i) => i.tipo !== "fixo"));
   $("#tabela-receitas").innerHTML = linhasPeriodo(c.receitas);
+}
+
+function desenharResumoTerceirizados(c) {
+  const r = c.resumo_terceirizados;
+  const alvo = $("#resumo-terceirizados");
+  if (!r) { alvo.innerHTML = "<p class='discreto'>Recalcule o cronograma para ver a contagem dos terceirizados (cálculo de uma versão anterior).</p>"; return; }
+  const linhas = (c.terceirizados || []).map((t) => `<tr><td>${esc(t.nome)}</td><td class="num"><b>${t.pico}</b></td><td>${dataBR(t.semana_pico)}</td>
+      <td class="num">${fmt1.format(t.homem_semana)}</td></tr>`).join("");
+  const sem = r.sem_estimativa || [];
+  alvo.innerHTML = `<div class="numeros">
+      <div class="numero"><span>Pico de próprios</span><b>${c.pico_proprios ?? c.pico} <small>(${dataBR(c.semana_pico_proprios)})</small></b></div>
+      <div class="numero"><span>Pico total na obra</span><b>${c.pico_total ?? "—"} <small>(${dataBR(c.semana_pico_total)})</small></b></div>
+      <div class="numero"><span>Homem-semana terceirizado</span><b>${fmt1.format(r.homem_semana_terceirizado || 0)}</b></div></div>
+    ${linhas ? `<div class="rolagem"><table class="simples"><thead><tr><th>Terceirizado</th><th class="num">Pico</th><th>Semana do pico</th><th class="num">Homem-semana</th></tr></thead>
+      <tbody>${linhas}</tbody></table></div>` : "<p class='discreto'>Nenhuma atividade terceirizada.</p>"}
+    ${sem.length ? `<p class="aviso-sem-estimativa"><b>Sem estimativa de pessoas</b> (contam 0: digite na mão de obra):
+      ${sem.map((x) => `<b>${esc(x.codigo)}</b> ${esc(x.nome || "")}`).join("; ")}</p>` : ""}`;
 }
 
 // ------------------------------------------------------------------ continuidade de equipe

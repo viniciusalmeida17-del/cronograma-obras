@@ -108,6 +108,9 @@ CREATE TABLE IF NOT EXISTS obra_atividades (
     fonte                 TEXT,            -- origem do tipo e das esperas (informativa)
     deps_prazos           TEXT,            -- JSON {pratica: [...], norma: [...]} nas atividades em que mudam
     deps_editadas         INTEGER DEFAULT 0, -- depende_de editado nesta obra (vale nas duas opções)
+    rotulo_terceirizado   TEXT,            -- item 7: nome do terceirizado nesta obra ('' = padrão)
+    rotulo_terceirizado_biblioteca TEXT,   -- o que veio da biblioteca
+    pessoas_terceirizado  INTEGER,         -- item 7: pessoas do terceirizado da biblioteca
     PRIMARY KEY (obra_id, codigo)
 );
 
@@ -136,25 +139,30 @@ COLUNAS_OBRA_ATIVIDADE = (
     "periodo_de", "periodo_ate", "equipe_principal", "observacao", "ordem_biblioteca", "editada",
     "execucao_padrao", "equipe_padrao", "equipe_max", "duracao_fixa_dias", "tipo_producao",
     "trocar_funcoes", "trocar_funcoes_biblioteca", "fonte", "deps_prazos", "deps_editadas",
+    "rotulo_terceirizado", "rotulo_terceirizado_biblioteca", "pessoas_terceirizado",
 )
 # Colunas acrescentadas depois da etapa 2 (migração de bancos antigos)
 MIGRACOES = {
     "servicos": {"status_ligacao": "TEXT", "regra_usada": "INTEGER", "origem_horas": "TEXT"},
     "obras": {"arquivo_salvo": "TEXT", "composicoes_abas": "TEXT", "prazos_espera": "TEXT"},
     "atividade_resumo": {"maquinas": "TEXT"},
-    "atividade_execucao": {"equipe_travada": "INTEGER", "producao_dia": "REAL", "maquinas_max": "INTEGER"},
+    "atividade_execucao": {"equipe_travada": "INTEGER", "producao_dia": "REAL", "maquinas_max": "INTEGER",
+                           "pessoas_terceirizado": "INTEGER"},
     "obra_parametros": {"volume_caminhao": "REAL", "caminhoes_dia": "REAL", "juntar": "TEXT"},
     "obra_calendario": {"transferiveis": "TEXT", "min_semanas_reducao": "INTEGER", "custo_troca": "REAL",
                         "salarios": "TEXT", "encargos": "REAL", "indiretos_reais": "TEXT", "terceirizados": "TEXT",
                         "criterios": "TEXT", "maquinas_max": "INTEGER", "dividir_terceirizadas": "INTEGER",
-                        "entradas": "TEXT", "custo_troca_tipo": "TEXT", "custo_troca_horas": "REAL"},
-    "cenarios": {"receita_variavel": "REAL", "resultado": "REAL", "custo_saida_volta": "REAL"},
-    "cenario_atividades": {"maquinas": "TEXT", "partes": "TEXT"},
+                        "entradas": "TEXT", "custo_troca_tipo": "TEXT", "custo_troca_horas": "REAL",
+                        "contar_terceirizados": "INTEGER"},
+    "cenarios": {"receita_variavel": "REAL", "resultado": "REAL", "custo_saida_volta": "REAL",
+                 "pico_total": "INTEGER", "semana_pico_total": "TEXT"},
+    "cenario_atividades": {"maquinas": "TEXT", "partes": "TEXT", "terceirizado": "TEXT"},
     "cenario_equipe_semana": {"horas_feriado": "REAL"},
     "obra_atividades": {"execucao_padrao": "TEXT", "equipe_padrao": "INTEGER", "equipe_max": "INTEGER",
                         "duracao_fixa_dias": "INTEGER", "tipo_producao": "TEXT", "trocar_funcoes": "TEXT",
                         "trocar_funcoes_biblioteca": "TEXT", "fonte": "TEXT", "deps_prazos": "TEXT",
-                        "deps_editadas": "INTEGER DEFAULT 0"},
+                        "deps_editadas": "INTEGER DEFAULT 0", "rotulo_terceirizado": "TEXT",
+                        "rotulo_terceirizado_biblioteca": "TEXT", "pessoas_terceirizado": "INTEGER"},
     "obra_dependencias": {"tipo": "TEXT NOT NULL DEFAULT 'TI'", "unidade": "TEXT NOT NULL DEFAULT 'd'"},
 }
 def _coluna_atividade(a: dict[str, Any], c: str) -> Any:
@@ -324,7 +332,8 @@ class Banco(MaoDeObraMixin, CronogramaMixin):
             )
 
     def atualizar_atividade_obra(self, obra_id: int, codigo: str, **campos: Any) -> None:
-        validos = {k: v for k, v in campos.items() if k in ("equipe_max", "equipe_padrao", "tipo_producao", "trocar_funcoes")}
+        validos = {k: v for k, v in campos.items() if k in ("equipe_max", "equipe_padrao", "tipo_producao", "trocar_funcoes",
+                                                                 "rotulo_terceirizado")}
         if not validos:
             return
         with closing(self._conectar()) as con, con:

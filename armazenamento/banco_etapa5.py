@@ -41,7 +41,9 @@ CREATE TABLE IF NOT EXISTS obra_calendario (
     -- item 6
     entradas              TEXT,               -- JSON funcao -> 0 (livre) ou até N entradas (NULL = padrão)
     custo_troca_tipo      TEXT,               -- horas (padrão: horas da própria função) ou reais
-    custo_troca_horas     REAL                -- horas por pessoa que sai ou volta (padrão 8)
+    custo_troca_horas     REAL,               -- horas por pessoa que sai ou volta (padrão 8)
+    -- item 7
+    contar_terceirizados  INTEGER             -- 1 = terceirizados contam no máximo de pessoas no canteiro (padrão)
 );
 
 -- padrões lembrados para as próximas obras (salários, encargos, indiretos reais)
@@ -75,6 +77,8 @@ CREATE TABLE IF NOT EXISTS cenarios (
     receita_variavel      REAL,               -- etapa 5.1: indiretas com critério mensal
     resultado             REAL,               -- receita variável − custo variável
     custo_saida_volta     REAL,               -- item 6: pessoas que saem e voltam (incluído no custo_total)
+    pico_total            INTEGER,            -- item 7: pico de pessoas na obra (próprios + terceirizados)
+    semana_pico_total     TEXT,
     detalhes              TEXT,               -- JSON: menor prazo, caminho crítico, indiretos, mensagem...
     calculado_em          TEXT NOT NULL,
     segundos              REAL,
@@ -93,7 +97,18 @@ CREATE TABLE IF NOT EXISTS cenario_atividades (
     critica               INTEGER,
     maquinas              TEXT,               -- JSON equipamento -> máquinas (etapa 5.1)
     partes                TEXT,               -- JSON [{inicio, termino, duracao}] (terceirizada dividida)
+    terceirizado          TEXT,               -- item 7: JSON {rotulo, pessoas, origem, detalhe, equipe_modo}
     PRIMARY KEY (cenario_id, atividade)
+);
+
+-- item 7: terceirizados por semana (maior dia da semana), identificados pelo serviço
+CREATE TABLE IF NOT EXISTS cenario_terceirizados_semana (
+    cenario_id            INTEGER NOT NULL REFERENCES cenarios(id) ON DELETE CASCADE,
+    semana                TEXT NOT NULL,      -- data da segunda-feira
+    rotulo                TEXT NOT NULL,      -- ex.: "Telhado" (aparece como "Telhado (terceirizado)")
+    pessoas               INTEGER NOT NULL,
+    atividades            TEXT,               -- JSON [{codigo, nome, pessoas}] em andamento na semana
+    PRIMARY KEY (cenario_id, semana, rotulo)
 );
 
 CREATE TABLE IF NOT EXISTS cenario_equipe_semana (
@@ -113,7 +128,7 @@ CALENDARIO_PADRAO: dict[str, Any] = {
     "max_pessoas_total": None, "max_por_funcao": {}, "tempo_limite": 60, "prazos": [],
     "transferiveis": None, "min_semanas_reducao": 2, "custo_troca": 0.0, "salarios": {}, "encargos": None,
     "indiretos_reais": None, "terceirizados": {}, "criterios": {}, "maquinas_max": 6, "dividir_terceirizadas": 1,
-    "entradas": None, "custo_troca_tipo": None, "custo_troca_horas": 8.0,
+    "entradas": None, "custo_troca_tipo": None, "custo_troca_horas": 8.0, "contar_terceirizados": 1,
 }
 _JSON = ("feriados_locais", "custos_hora", "max_por_funcao", "prazos", "transferiveis", "salarios",
          "indiretos_reais", "terceirizados", "criterios", "entradas")
@@ -208,7 +223,10 @@ class CronogramaMixin:
                                              "receita_variavel", "resultado", "receitas", "horas_feriado",
                                              "ociosidade_funcao", "causas_ociosidade", "diagnostico", "avisos_custos",
                                              "custo_terceirizados", "partes", "maquinas",
-                                             "continuidade", "saida_volta_funcao", "entradas")}
+                                             "continuidade", "saida_volta_funcao", "entradas",
+                                             "terceirizados", "pico_proprios", "semana_pico_proprios")}
+        if detalhes.get("terceirizados"):   # as semanas ficam na tabela cenario_terceirizados_semana
+            detalhes["terceirizados"] = {k: v for k, v in detalhes["terceirizados"].items() if k != "semanas"}
         agora = datetime.now().isoformat(timespec="seconds")
         with closing(self._conectar()) as con, con:
             antes = con.execute("SELECT MAX(escolhido) FROM cenarios WHERE obra_id = ? AND prazo_meses = ?",
@@ -218,20 +236,22 @@ class CronogramaMixin:
             cur = con.execute(
                 """INSERT INTO cenarios (obra_id, prazo_meses, data_limite, situacao, termino, pico, homem_semana,
                        ociosidade, custo_mao_de_obra, custo_indiretos, custo_total, detalhes, calculado_em, segundos,
-                       escolhido, receita_variavel, resultado, custo_saida_volta)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       escolhido, receita_variavel, resultado, custo_saida_volta, pico_total, semana_pico_total)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (obra_id, prazo_meses, data_limite, res["situacao"], res.get("termino"), res.get("pico"),
                  res.get("homem_semana"), res.get("ociosidade"), res.get("custo_mao_de_obra"),
                  res.get("custo_indiretos"), res.get("custo_total"), json.dumps(detalhes, ensure_ascii=False),
                  agora, res.get("segundos"), escolhido, res.get("receita_variavel"), res.get("resultado"),
-                 res.get("custo_saida_volta")))
+                 res.get("custo_saida_volta"), (res.get("terceirizados") or {}).get("pico_total"),
+                 (res.get("terceirizados") or {}).get("semana_pico_total")))
             cid = cur.lastrowid
             con.executemany(
                 "INSERT INTO cenario_atividades (cenario_id, atividade, inicio, termino, modo, duracao, unidade, folga,"
-                " critica, maquinas, partes) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                " critica, maquinas, partes, terceirizado) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 [(cid, a["codigo"], a["inicio"], a["termino"], json.dumps(a["equipe"], ensure_ascii=False), a["duracao"],
                   a["unidade"], a["folga"], int(a["critica"]), json.dumps(a.get("maquinas") or {}, ensure_ascii=False),
-                  json.dumps(a.get("partes"), ensure_ascii=False) if a.get("partes") else None)
+                  json.dumps(a.get("partes"), ensure_ascii=False) if a.get("partes") else None,
+                  json.dumps(a["terceirizado"], ensure_ascii=False) if a.get("terceirizado") else None)
                  for a in res.get("atividades") or []])
             con.executemany(
                 "INSERT INTO cenario_equipe_semana (cenario_id, semana, funcao, contratados, horas_ocupadas, horas_pagas,"
@@ -239,7 +259,31 @@ class CronogramaMixin:
                 [(cid, e["semana"], e["funcao"], e["contratados"], e["horas_ocupadas"], e["horas_pagas"],
                   e.get("horas_feriado") or 0.0)
                  for e in res.get("equipe_semana") or []])
+            self._gravar_terceirizados_semana(con, cid, res.get("terceirizados"))
         return cid
+
+    @staticmethod
+    def _gravar_terceirizados_semana(con, cid: int, terc: dict[str, Any] | None) -> None:
+        con.execute("DELETE FROM cenario_terceirizados_semana WHERE cenario_id = ?", (cid,))
+        con.executemany(
+            "INSERT INTO cenario_terceirizados_semana (cenario_id, semana, rotulo, pessoas, atividades) VALUES (?,?,?,?,?)",
+            [(cid, l["semana"], l["rotulo"], l["pessoas"], json.dumps(l.get("atividades") or [], ensure_ascii=False))
+             for l in (terc or {}).get("semanas") or []])
+
+    def regravar_terceirizados(self, cenario_id: int, atividades: dict[str, dict[str, Any] | None],
+                               terc: dict[str, Any]) -> None:
+        """Contagem de terceirizados refeita (nome ou pessoas mudaram), sem rodar o otimizador de novo."""
+        with closing(self._conectar()) as con, con:
+            for cod, t in atividades.items():
+                con.execute("UPDATE cenario_atividades SET terceirizado = ? WHERE cenario_id = ? AND atividade = ?",
+                            (json.dumps(t, ensure_ascii=False) if t else None, cenario_id, cod))
+            r = con.execute("SELECT detalhes FROM cenarios WHERE id = ?", (cenario_id,)).fetchone()
+            det = json.loads(r["detalhes"] or "{}") if r else {}
+            det["terceirizados"] = {k: v for k, v in terc.items() if k != "semanas"}
+            con.execute("UPDATE cenarios SET detalhes = ?, pico_total = ?, semana_pico_total = ? WHERE id = ?",
+                        (json.dumps(det, ensure_ascii=False), terc.get("pico_total"), terc.get("semana_pico_total"),
+                         cenario_id))
+            self._gravar_terceirizados_semana(con, cenario_id, terc)
 
     def listar_cenarios(self, obra_id: int) -> list[dict[str, Any]]:
         with closing(self._conectar()) as con:
@@ -266,10 +310,14 @@ class CronogramaMixin:
                 a["equipe"] = json.loads(a.pop("modo") or "{}")
                 a["maquinas"] = json.loads(a.get("maquinas") or "{}")
                 a["partes"] = json.loads(a["partes"]) if a.get("partes") else None
+                a["terceirizado"] = json.loads(a["terceirizado"]) if a.get("terceirizado") else None
                 a["critica"] = bool(a["critica"])
                 d["atividades"].append(a)
             d["equipe_semana"] = [dict(r) for r in con.execute(
                 "SELECT * FROM cenario_equipe_semana WHERE cenario_id = ? ORDER BY semana, funcao", (cenario_id,))]
+            d["terceirizados_semana"] = [{**dict(r), "atividades": json.loads(r["atividades"] or "[]")}
+                                         for r in con.execute("SELECT * FROM cenario_terceirizados_semana WHERE "
+                                                              "cenario_id = ? ORDER BY semana, rotulo", (cenario_id,))]
         return d
 
     def escolher_cenario(self, obra_id: int, cenario_id: int) -> None:

@@ -192,6 +192,8 @@ def montar_rede(biblioteca: Biblioteca, servicos: Iterable[Mapping[str, Any]], e
             "equipe_max": a.equipe_max, "duracao_fixa_dias": a.duracao_fixa_dias, "tipo_producao": a.tipo_producao,
             "trocar_funcoes": formatar_trocas(a.trocar_funcoes), "trocar_funcoes_biblioteca": formatar_trocas(a.trocar_funcoes),
             "fonte": a.fonte, "deps_prazos": None, "deps_editadas": False,
+            "rotulo_terceirizado": a.rotulo_terceirizado or "", "rotulo_terceirizado_biblioteca": a.rotulo_terceirizado or "",
+            "pessoas_terceirizado": a.pessoas_terceirizado,
         }
 
     na_sequencia = {c for c, a in atividades.items() if a["tipo"] != INDIRETA}

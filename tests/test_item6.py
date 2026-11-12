@@ -29,10 +29,11 @@ TROCADAS = ("Eletricista", "Ajudante de eletricista", "Bombeiro", "Ajudante de b
 # ------------------------------------------------------------------ biblioteca nova
 
 
-def test_biblioteca_tem_19_colunas_e_as_tres_novas_no_fim():
+def test_biblioteca_tem_as_tres_colunas_do_item6():
+    """Item 6: 19 colunas, as três últimas novas (o item 7 acrescentou mais duas depois delas)."""
     ws = openpyxl.load_workbook(BIBLIOTECA, read_only=True)["Atividades"]
     cab = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
-    assert len(cab) == 19 and tuple(cab[-3:]) == COLUNAS_NOVAS
+    assert len(cab) >= 19 and tuple(cab[16:19]) == COLUNAS_NOVAS
 
 
 def test_colunas_lidas_pelo_nome(tmp_path, biblioteca):

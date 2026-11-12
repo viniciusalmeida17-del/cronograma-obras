@@ -55,6 +55,68 @@ def destino_final(funcao: str, trocas: Iterable[tuple[str, str]], juntar: Mappin
     return next(iter(juntar_horas({dict(trocas).get(funcao, funcao): 1.0}, juntar)))
 
 
+ORIGEM_DIGITADO = "digitado"
+ORIGEM_COMPOSICAO = "composição"
+ORIGEM_OUTRAS_OBRAS = "outras obras"
+ORIGEM_BIBLIOTECA = "biblioteca"
+SEM_ESTIMATIVA = "sem estimativa"
+AVISO_SEM_PESSOAS = "sem estimativa de pessoas: digite na mão de obra"
+
+
+def nome_terceirizado(rotulo: str) -> str:
+    return f"{rotulo} (terceirizado)"
+
+
+def terceirizado_da_atividade(ativ: Mapping[str, Any], ex: Mapping[str, Any], calc: Mapping[str, Any] | None,
+                              ajustadas: Mapping[str, float], duracao: Mapping[str, Any] | None, horas_dia: float,
+                              padrao_outras_obras: int | None = None) -> dict[str, Any]:
+    """Nome e pessoas do terceirizado (item 7). Pessoas, nesta ordem: digitado nesta obra → equipe da composição
+    (a do modo escolhido pelo otimizador; com duração digitada, teto(horas ÷ (dias × horas/dia)) por função) →
+    último valor digitado em outra obra → coluna pessoas_terceirizado da biblioteca → 0 (sem estimativa).
+
+    `por_modo`: a quantidade depende do modo (equipe) escolhido no cronograma; `pessoas` é a da equipe padrão.
+    """
+    principal = (calc or {}).get("funcao_principal") or ativ.get("equipe_principal")
+    rotulo = (ativ.get("rotulo_terceirizado") or "").strip() or principal or ativ.get("nome") or ativ.get("codigo")
+    horas = {f: h for f, h in ajustadas.items() if h > 0}
+    detalhe: dict[str, int] = {}
+    por_modo = False
+    digitado = ex.get("pessoas_terceirizado")
+    if digitado:
+        pessoas, origem = int(digitado), ORIGEM_DIGITADO
+    elif horas and duracao and duracao.get("tipo") == "manual" and duracao.get("dias"):
+        detalhe = {f: max(1, _teto(h / (duracao["dias"] * horas_dia))) for f, h in horas.items()}
+        pessoas, origem = sum(detalhe.values()), ORIGEM_COMPOSICAO
+    elif horas and calc and calc.get("equipe") and (duracao or {}).get("tipo") == "calculada":
+        detalhe = dict(calc["equipe"])
+        pessoas, origem, por_modo = sum(detalhe.values()), ORIGEM_COMPOSICAO, True
+    elif padrao_outras_obras:
+        pessoas, origem = int(padrao_outras_obras), ORIGEM_OUTRAS_OBRAS
+    elif ativ.get("pessoas_terceirizado"):
+        pessoas, origem = int(ativ["pessoas_terceirizado"]), ORIGEM_BIBLIOTECA
+    else:
+        pessoas, origem = 0, SEM_ESTIMATIVA
+    return {"rotulo": rotulo, "nome": nome_terceirizado(rotulo), "rotulo_obra": ativ.get("rotulo_terceirizado") or "",
+            "rotulo_biblioteca": ativ.get("rotulo_terceirizado_biblioteca") or "",
+            "pessoas": pessoas, "origem": origem, "detalhe": detalhe, "por_modo": por_modo,
+            "digitado": int(digitado) if digitado else None, "padrao_outras_obras": padrao_outras_obras,
+            "pessoas_biblioteca": ativ.get("pessoas_terceirizado"),
+            "aviso": AVISO_SEM_PESSOAS if origem == SEM_ESTIMATIVA else None}
+
+
+def texto_detalhe(detalhe: Mapping[str, int]) -> str:
+    """{'Eletricista': 2, 'Ajudante de eletricista': 1} → '2 eletricistas + 1 ajudante de eletricista'."""
+    partes = []
+    for f, n in sorted(detalhe.items(), key=lambda x: (-x[1], x[0])):
+        nome = f.lower()
+        if n > 1:
+            pal = nome.split(" ")
+            pal[0] = pal[0] + ("es" if pal[0].endswith(("r", "z")) else "s")
+            nome = " ".join(pal)
+        partes.append(f"{n} {nome}")
+    return " + ".join(partes)
+
+
 def calcular_duracao(
     horas_ajustadas: Mapping[str, float],
     horas_equipamento: Mapping[str, float],
@@ -77,8 +139,9 @@ def calcular_duracao(
         return None
     equipe: dict[str, int] = {}
     dias_funcao: dict[str, float] = {}
-    principal = None
-    if horas:
+    if not horas:
+        principal = None
+    else:
         if principal not in horas:
             principal = max(horas, key=lambda f: (horas[f], f))
         hp = horas[principal]
@@ -244,6 +307,7 @@ def calcular_obra(
     execucao: Mapping[str, Mapping[str, Any]],
     parametros: Mapping[str, Any],
     prazo: tuple[float | None, str | None] = (None, None),
+    pessoas_padrao: Mapping[str, int] | None = None,
 ) -> dict[str, Any]:
     """Resumo por atividade e da obra. `execucao`: codigo -> {execucao, rendimento, equipe_padrao, duracao_manual}."""
     params = {**PARAMETROS_PADRAO, **{k: v for k, v in parametros.items() if v is not None}}
@@ -324,6 +388,8 @@ def calcular_obra(
         if execucao_escolhida == PROPRIA:
             for f, h in ajustadas.items():
                 horas_funcao_propria[f] += h
+        terceirizado = (terceirizado_da_atividade(ativ, ex, calc, ajustadas, duracao, hd, (pessoas_padrao or {}).get(cod))
+                        if execucao_escolhida == TERCEIRIZADA else None)
         resultado_ativ.append({
             "codigo": cod, "nome": ativ.get("nome"), "etapa": ativ.get("etapa"), "tipo": ativ["tipo"],
             "execucao": execucao_escolhida, "execucao_padrao": ativ.get("execucao_padrao") or PROPRIA,
@@ -349,6 +415,9 @@ def calcular_obra(
             "volume_m3": round(volume, 4) if ativ.get("tipo_producao") == CONCRETAGEM else None,
             "dias_concretagem": minimo,
             "ordem_biblioteca": ativ.get("ordem_biblioteca", 0),
+            "terceirizado": terceirizado,
+            "rotulo_terceirizado": ativ.get("rotulo_terceirizado") or "",
+            "rotulo_terceirizado_biblioteca": ativ.get("rotulo_terceirizado_biblioteca") or "",
         })
 
     semanas = semanas_do_prazo(*prazo)

@@ -44,6 +44,12 @@ def atividades_da_obra(banco: Banco, obra_id: int, biblioteca: Biblioteca | None
 
             a["trocar_funcoes"] = formatar_trocas(lib.trocar_funcoes) if lib is not None else ""
             a["trocar_funcoes_biblioteca"] = a["trocar_funcoes"]
+        if a.get("rotulo_terceirizado_biblioteca") is None:   # rede montada antes do item 7
+            a["rotulo_terceirizado_biblioteca"] = (lib.rotulo_terceirizado if lib is not None else None) or ""
+            if a.get("rotulo_terceirizado") is None:
+                a["rotulo_terceirizado"] = a["rotulo_terceirizado_biblioteca"]
+            if a.get("pessoas_terceirizado") is None and lib is not None:
+                a["pessoas_terceirizado"] = lib.pessoas_terceirizado
         a["execucao_padrao"] = a.get("execucao_padrao") or "propria"
         a["equipe_padrao"] = a.get("equipe_padrao") or EQUIPE_PADRAO
         a["equipe_max"] = a.get("equipe_max") or EQUIPE_MAX
@@ -121,7 +127,7 @@ def estado_mao_de_obra(banco: Banco, obra_id: int, biblioteca: Biblioteca | None
     obra = dados["obra"]
     producoes = aplicar_producao(banco, dados["servicos"], atividades, execucao)
     resultado = calcular_obra(dados["servicos"], analises, atividades, execucao, parametros,
-                              (obra.get("prazo_valor"), obra.get("prazo_unidade")))
+                              (obra.get("prazo_valor"), obra.get("prazo_unidade")), banco.pessoas_terceirizado_padrao())
     banco.gravar_estimativas(analises)
     banco.gravar_resumo_atividades(obra_id, resultado["atividades"])
 
@@ -372,6 +378,48 @@ def definir_trocas(banco: Banco, obra_id: int, codigo: str, texto: Any, salvar_b
             backup = salvar_atividade_na_biblioteca(codigo, None, None, caminho_biblioteca, trocar_funcoes=trocas)
         except ErroBiblioteca as exc:
             raise ErroMaoDeObra("Não foi possível gravar na biblioteca: " + "; ".join(e["mensagem"] for e in exc.erros))
+    estado = estado_mao_de_obra(banco, obra_id, biblioteca)
+    estado["backup_biblioteca"] = str(backup) if backup else None
+    return estado
+
+
+def definir_terceirizado(banco: Banco, obra_id: int, codigo: str, rotulo: Any = _NADA, pessoas: Any = _NADA,
+                         salvar_biblioteca: bool = False, caminho_biblioteca: Any = None,
+                         biblioteca: Biblioteca | None = None) -> dict[str, Any]:
+    """Nome e pessoas do terceirizado (item 7) nesta obra. Vazio volta ao padrão.
+
+    O nome pode ser gravado também na coluna rotulo_terceirizado da biblioteca (com cópia de segurança).
+    As pessoas digitadas viram o padrão das próximas obras para essa atividade.
+    """
+    from atividades.biblioteca import ErroBiblioteca, salvar_atividade_na_biblioteca
+
+    atividades = atividades_da_obra(banco, obra_id, biblioteca)
+    if codigo not in atividades or atividades[codigo]["tipo"] == INDIRETA:
+        raise ErroMaoDeObra(f"Atividade {codigo} não está na sequência desta obra.")
+    backup = None
+    if rotulo is not _NADA:
+        texto = re.sub(r"\s+", " ", str(rotulo or "")).strip()
+        texto = re.sub(r"\s*\(terceirizad[oa]\)$", "", texto, flags=re.I)
+        if len(texto) > 60:
+            raise ErroMaoDeObra("O nome do terceirizado deve ter até 60 caracteres.")
+        banco.atualizar_atividade_obra(obra_id, codigo, rotulo_terceirizado=texto)
+        if salvar_biblioteca:
+            try:
+                backup = salvar_atividade_na_biblioteca(codigo, None, None, caminho_biblioteca, rotulo_terceirizado=texto)
+            except ErroBiblioteca as exc:
+                raise ErroMaoDeObra("Não foi possível gravar na biblioteca: " + "; ".join(e["mensagem"] for e in exc.erros))
+    if pessoas is not _NADA:
+        if pessoas in (None, ""):
+            banco.atualizar_execucao(obra_id, codigo, pessoas_terceirizado=None)
+        else:
+            try:
+                v = float(str(pessoas).replace(",", "."))
+            except ValueError:
+                raise ErroMaoDeObra("Pessoas do terceirizado: digite um número inteiro.")
+            if v != int(v) or not 1 <= v <= 500:
+                raise ErroMaoDeObra("Pessoas do terceirizado: número inteiro entre 1 e 500.")
+            banco.atualizar_execucao(obra_id, codigo, pessoas_terceirizado=int(v))
+            banco.lembrar_pessoas_terceirizado(codigo, int(v))
     estado = estado_mao_de_obra(banco, obra_id, biblioteca)
     estado["backup_biblioteca"] = str(backup) if backup else None
     return estado

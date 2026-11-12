@@ -468,3 +468,11 @@ td.trocas { font-size: .78rem; max-width: 14rem; }
 .custo-troca input { width: 90px; }
 .frases-continuidade { margin: .5rem 0 0 1.1rem; }
 #tabela-continuidade td { vertical-align: top; }
+
+/* item 7: terceirizados na contagem de pessoas */
+i.quadrado.terc { border: 1px dashed; box-sizing: border-box; }
+i.linha-total { display: inline-block; width: 18px; height: 0; border-top: 2px solid #1d1c1a; vertical-align: middle; margin-right: 4px; }
+.grafico-equipe .linha-total-obra { stroke: #1d1c1a; stroke-width: 2; pointer-events: none; }
+table.equipe-semana tr.terceirizado td { color: #6b4a1f; background: #fbf6ee; }
+table.equipe-semana tr.terceirizado td:first-child { font-style: italic; }
+.aviso-sem-estimativa { background: #fff4d6; border-left: 3px solid #e0b000; padding: 6px 10px; }

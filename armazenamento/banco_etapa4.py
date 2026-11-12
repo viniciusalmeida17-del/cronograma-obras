@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS atividade_execucao (
     equipe_travada        INTEGER,            -- etapa 5: pessoas da função principal (opcional)
     producao_dia          REAL,               -- etapa 5.1: terceirizada, produção por dia (duração = qtd ÷ produção)
     maquinas_max          INTEGER,            -- etapa 5.1: máximo de máquinas de cada equipamento (padrão 6)
+    pessoas_terceirizado  INTEGER,            -- item 7: pessoas do terceirizado digitadas nesta obra
     PRIMARY KEY (obra_id, atividade)
 );
 
@@ -98,6 +99,13 @@ CREATE TABLE IF NOT EXISTS producao_padrao (
     atividade             TEXT PRIMARY KEY,
     producao_dia          REAL NOT NULL,
     unidade               TEXT,
+    data                  TEXT NOT NULL
+);
+
+-- item 7: pessoas do terceirizado digitadas, padrão para as próximas obras (fica quando a obra é excluída)
+CREATE TABLE IF NOT EXISTS pessoas_terceirizado_padrao (
+    atividade             TEXT PRIMARY KEY,
+    pessoas               INTEGER NOT NULL,
     data                  TEXT NOT NULL
 );
 
@@ -301,7 +309,7 @@ class MaoDeObraMixin:
             linhas = con.execute("SELECT * FROM atividade_execucao WHERE obra_id = ?", (obra_id,)).fetchall()
             maquinas = con.execute("SELECT * FROM atividade_equipamento WHERE obra_id = ?", (obra_id,)).fetchall()
         res = {l["atividade"]: {k: l[k] for k in ("execucao", "rendimento", "equipe_padrao", "duracao_manual",
-                                                   "producao_dia", "maquinas_max")} for l in linhas}
+                                                   "producao_dia", "maquinas_max", "pessoas_terceirizado")} for l in linhas}
         for m in maquinas:
             res.setdefault(m["atividade"], {}).setdefault("maquinas", {})[m["equipamento"]] = m["quantidade"]
         return res
@@ -323,7 +331,7 @@ class MaoDeObraMixin:
 
     def atualizar_execucao(self, obra_id: int, atividade: str, **campos: Any) -> None:
         validos = {k: v for k, v in campos.items() if k in ("execucao", "rendimento", "equipe_padrao", "duracao_manual",
-                                                            "producao_dia", "maquinas_max")}
+                                                            "producao_dia", "maquinas_max", "pessoas_terceirizado")}
         if not validos:
             return
         with closing(self._conectar()) as con, con:
@@ -366,6 +374,15 @@ class MaoDeObraMixin:
         with closing(self._conectar()) as con, con:
             con.execute("INSERT OR REPLACE INTO producao_padrao VALUES (?,?,?,?)",
                         (atividade, producao, unidade, datetime.now().isoformat(timespec="seconds")))
+
+    def pessoas_terceirizado_padrao(self) -> dict[str, int]:
+        with closing(self._conectar()) as con:
+            return {r["atividade"]: r["pessoas"] for r in con.execute("SELECT * FROM pessoas_terceirizado_padrao")}
+
+    def lembrar_pessoas_terceirizado(self, atividade: str, pessoas: int) -> None:
+        with closing(self._conectar()) as con, con:
+            con.execute("INSERT OR REPLACE INTO pessoas_terceirizado_padrao VALUES (?,?,?)",
+                        (atividade, int(pessoas), datetime.now().isoformat(timespec="seconds")))
 
     # ------------------------------------------------------------------ banco de coeficientes
 

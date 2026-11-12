@@ -13,7 +13,17 @@ from atividades.biblioteca import Biblioteca
 from leitor_planilha.texto import unidade_canonica
 from mao_de_obra import obra as etapa4
 
-from .agenda import CUSTO_TROCA_HORAS, DIAS_POR_MES, LIVRE, UMA_ENTRADA, Instancia, ItemIndireto
+from .agenda import (
+    CUSTO_TROCA_HORAS,
+    DIAS_POR_MES,
+    LIVRE,
+    UMA_ENTRADA,
+    Instancia,
+    ItemIndireto,
+    canteiro_conta_terceirizados,
+    contar_terceirizados,
+    dias_com_canteiro,
+)
 from .calendario import Calendario, data_limite, para_data, segunda_da_semana
 from .modelo import (
     EQUIPE_MAX,
@@ -250,6 +260,7 @@ def parametros_cronograma(banco: Banco, obra_id: int, biblioteca: Biblioteca | N
         "entradas": entradas,
         "transferiveis": [f for f, n in entradas.items() if n == LIVRE],
         "custo_troca_tipo": tipo_troca, "custo_troca": custo_troca, "custo_troca_horas": horas_troca,
+        "contar_terceirizados": bool(cal["contar_terceirizados"]),
         "atividades_proprias": atividades,
         "codigos_sequencia": [c for c, a in sorted(rede["atividades"].items(), key=lambda x: x[1]["ordem_biblioteca"])
                               if a["tipo"] != "indireta"],
@@ -400,6 +411,8 @@ def salvar_parametros_cronograma(banco: Banco, obra_id: int, dados: dict[str, An
         c["maquinas_max"] = _inteiro(dados["maquinas_max"], "o máximo de máquinas por equipamento", 1, 50)
     if "dividir_terceirizadas" in dados:
         c["dividir_terceirizadas"] = 1 if dados["dividir_terceirizadas"] else 0
+    if "contar_terceirizados" in dados:
+        c["contar_terceirizados"] = 1 if dados["contar_terceirizados"] else 0
     if "encargos" in dados:
         c["encargos"] = _real(dados["encargos"], "o percentual de encargos", 0, 300)
         if c["encargos"] is not None:
@@ -504,6 +517,8 @@ def aplicar_sugestao(banco: Banco, obra_id: int, acao: dict[str, Any], bibliotec
         definir_limites(banco, obra_id, cod, maquinas_max=valor, biblioteca=biblioteca)
     elif tipo == "destravar":
         banco.travar_equipe(obra_id, cod, None)
+    elif tipo == "max_pessoas_total":
+        salvar_parametros_cronograma(banco, obra_id, {"max_pessoas_total": valor})
     elif tipo == "duracao":
         try:
             etapa4.definir_atividade(banco, obra_id, cod, duracao_manual=valor, biblioteca=biblioteca)
@@ -595,6 +610,7 @@ def montar_instancia(banco: Banco, obra_id: int, prazo_meses: float, biblioteca:
         custo_troca=params["custo_troca"] if params["custo_troca_tipo"] == "reais" else 0.0,
         custo_troca_horas=params["custo_troca_horas"] if params["custo_troca_tipo"] == "horas" else 0.0,
         receitas=receitas_da_obra(dados["servicos"], rede["atividades"], prazo_lic, c.get("criterios") or {}),
+        contar_terceirizados=params["contar_terceirizados"],
     )
     terc = {t["codigo"]: (t["contratado"] if t["contratado"] is not None else t["planilha"])
             for t in params["terceirizados"]}
@@ -679,9 +695,30 @@ def diagnostico(inst: Instancia, ctx: dict[str, Any]) -> dict[str, Any]:
                 sugestoes.append({"texto": f"rever a duração da {nome} ({quem}): de {item['duracao']} para {nova} dias "
                                            f"úteis reduz {ganho} dias úteis",
                                   "ganho": ganho, "acao": {"tipo": "duracao", "atividade": cod, "valor": nova}})
+    canteiro = None
+    if inst.max_total is not None:
+        # limite do canteiro (próprios + terceirizados, se a opção estiver ligada) segurando o prazo?
+        x = inst.max_total
+        com_limite = dias_com_canteiro(inst, x)
+        if com_limite > base:
+            canteiro = {"maximo": x, "dias_uteis": com_limite, "sem_limite": base}
+            alvo = max(inst.horizonte, base)
+            y = x
+            for passo in (1, 2, 3, 4, 5, 6, 8, 10, 15, 20, 30, 40, 60, 100, 200):
+                y = x + passo
+                if dias_com_canteiro(inst, y) <= alvo:
+                    break
+            ganho = com_limite - dias_com_canteiro(inst, y)
+            if ganho > 0:
+                quem = "próprios + terceirizados" if canteiro_conta_terceirizados(inst) else "próprios"
+                sugestoes.append({"texto": f"aumentar o máximo de pessoas no canteiro ({quem}) de {x} para {y} "
+                                           f"reduz {ganho} dias úteis",
+                                  "ganho": ganho, "acao": {"tipo": "max_pessoas_total", "valor": y}})
+                canteiro.update(sugerido=y, ganho=ganho)
+            base = max(base, com_limite)
     sugestoes.sort(key=lambda x: -x["ganho"])
     return {"menor_prazo": {k: v for k, v in mp.items() if k != "solucao"}, "caminho_critico": cadeia,
-            "sugestoes": sugestoes[:10], "dias_uteis_limite": inst.horizonte,
+            "sugestoes": sugestoes[:10], "dias_uteis_limite": inst.horizonte, "canteiro": canteiro,
             "faltam_dias_uteis": max(0, base - inst.horizonte)}
 
 
@@ -784,6 +821,8 @@ def instancia_com(inst: Instancia, c: dict[str, Any], juntar: dict[str, str] | N
         extra = sum(h * inst.custo_hora.get(f, 0.0) for f, h in horas.items())
         t.execucao = TERCEIRIZADA
         t.travada = None
+        t.terceirizado = {"rotulo": t.funcao_principal or t.nome or cod, "pessoas": sum(m0.equipe.values()),
+                          "origem": "composição", "por_modo": True, "detalhe": dict(m0.equipe)}
         t.partes_max = PARTES_MAX if dividir_terceirizadas else 1
         texto = (f"Terceirizar a {nome} (considerando que o terceirizado cobra a mesma mão de obra: "
                  f"{sum(horas.values()):.0f} h = {_reais(extra)})")
@@ -1018,6 +1057,7 @@ def comparacao(banco: Banco, obra_id: int) -> dict[str, Any]:
             "id": c["id"], "prazo_meses": c["prazo_meses"], "data_limite": c["data_limite"], "situacao": c["situacao"],
             "principal": principal is not None and c["id"] == principal["id"],
             "termino": c["termino"], "pico": c["pico"], "homem_semana": c["homem_semana"], "ociosidade": c["ociosidade"],
+            "pico_total": c.get("pico_total"), "semana_pico_total": c.get("semana_pico_total"),
             "custo_mao_de_obra": c["custo_mao_de_obra"], "custo_indiretos": c["custo_indiretos"],
             "custo_saida_volta": c.get("custo_saida_volta"),
             "custo_total": c["custo_total"], "receita_variavel": c.get("receita_variavel"),
@@ -1085,7 +1125,8 @@ def detalhe_cenario(banco: Banco, obra_id: int, cenario_id: int | None = None) -
                                           "espera": d.get("espera_dias") or 0, "unidade": d.get("unidade") or "d"})
     for a in c["atividades"]:
         a["dependencias"] = rede_deps.get(a["codigo"], [])
-    semanas = sorted({e["semana"] for e in c["equipe_semana"]})
+    terc_semanas = c.pop("terceirizados_semana", None) or []
+    semanas = sorted({e["semana"] for e in c["equipe_semana"]} | {t["semana"] for t in terc_semanas})
     funcoes: dict[str, dict[str, Any]] = {}
     for e in c["equipe_semana"]:
         f = funcoes.setdefault(e["funcao"], {"funcao": e["funcao"], "contratados": [0] * len(semanas),
@@ -1106,7 +1147,81 @@ def detalhe_cenario(banco: Banco, obra_id: int, cenario_id: int | None = None) -
     c["semanas"] = semanas
     c["funcoes"] = sorted(funcoes.values(), key=lambda f: (f["entrada"] or "", -f["pico"]))
     c["total_semana"] = [sum(f["contratados"][k] for f in funcoes.values()) for k in range(len(semanas))]
+    # terceirizados (item 7): uma linha por nome, depois das funções próprias, e o total na obra
+    resumo_t = det.get("terceirizados") or {}
+    linhas_t: dict[str, dict[str, Any]] = {}
+    for t in terc_semanas:
+        lt = linhas_t.setdefault(t["rotulo"], {"rotulo": t["rotulo"], "nome": f"{t['rotulo']} (terceirizado)",
+                                               "pessoas": [0] * len(semanas), "atividades": [[] for _ in semanas]})
+        k = semanas.index(t["semana"])
+        lt["pessoas"][k] = t["pessoas"]
+        lt["atividades"][k] = t["atividades"]
+    ordem_t = {r["rotulo"]: n for n, r in enumerate(resumo_t.get("rotulos") or [])}
+    for lt in linhas_t.values():
+        lt["pico"] = max(lt["pessoas"], default=0)
+        lt["semana_pico"] = semanas[lt["pessoas"].index(lt["pico"])] if lt["pico"] else None
+        lt["homem_semana"] = sum(lt["pessoas"])
+    c["terceirizados"] = sorted(linhas_t.values(), key=lambda x: (ordem_t.get(x["rotulo"], 999), -x["pico"], x["rotulo"]))
+    c["total_terceirizados"] = [sum(lt["pessoas"][k] for lt in linhas_t.values()) for k in range(len(semanas))]
+    c["total_obra"] = [c["total_semana"][k] + c["total_terceirizados"][k] for k in range(len(semanas))]
+    c["pico_proprios"] = max(c["total_semana"], default=0)
+    c["semana_pico_proprios"] = semanas[c["total_semana"].index(c["pico_proprios"])] if c["pico_proprios"] else None
+    if c.get("pico_total") is None and resumo_t:
+        c["pico_total"], c["semana_pico_total"] = resumo_t.get("pico_total"), resumo_t.get("semana_pico_total")
+    c["resumo_terceirizados"] = {k: resumo_t.get(k) for k in ("pico_terceirizados", "homem_semana_terceirizado",
+                                                             "sem_estimativa", "rotulos")} if resumo_t else None
+    if c["resumo_terceirizados"] and c["resumo_terceirizados"].get("rotulos"):
+        c["resumo_terceirizados"]["rotulos"] = [{k: v for k, v in r.items() if k != "serie"}
+                                               for r in c["resumo_terceirizados"]["rotulos"]]
     return c
+
+
+def recontar_terceirizados(banco: Banco, obra_id: int, biblioteca: Biblioteca | None = None) -> dict[str, Any]:
+    """Refaz só a contagem dos terceirizados dos cenários calculados (nome ou pessoas mudaram), com as posições
+    já calculadas. Diz se é preciso rodar o otimizador de novo (limite do canteiro com os terceirizados)."""
+    estado = _estado_etapa4(banco, obra_id, biblioteca)
+    info = {a["codigo"]: a.get("terceirizado") for a in estado["atividades"]}
+    nomes = {a["codigo"]: a.get("nome") for a in estado["atividades"]}
+    try:
+        cal = calendario_da_obra(banco, obra_id)
+    except ErroCronograma:
+        return {"recontados": 0, "precisa_recalcular": False}
+    n = 0
+    for resumo in banco.listar_cenarios(obra_id):
+        if resumo["situacao"] not in VALIDAS:
+            continue
+        c = banco.carregar_cenario(resumo["id"])
+        posicoes, novos = [], {}
+        for a in c["atividades"]:
+            cod = a["atividade"]
+            t = info.get(cod)
+            if not t:
+                novos[cod] = None
+                continue
+            antigo = a.get("terceirizado") or {}
+            pessoas = t["pessoas"]
+            detalhe = dict(t.get("detalhe") or {})
+            if t.get("por_modo") and antigo.get("equipe_modo"):
+                detalhe = dict(antigo["equipe_modo"])
+                pessoas = sum(detalhe.values())
+            ini = cal.indice_util(cal.offset_de(para_data(a["inicio"])))
+            if a.get("partes"):
+                dias = [(cal.indice_util(cal.offset_de(para_data(p["inicio"]))), p["duracao"]) for p in a["partes"]]
+            else:
+                ult = cal.ultimo_util_ate(cal.offset_de(para_data(a["termino"])))
+                dias = [(ini, max(1, ult - ini + 1))]
+            novos[cod] = {**t, "pessoas": pessoas, "detalhe": detalhe, "equipe_modo": antigo.get("equipe_modo") or {}}
+            posicoes.append({"codigo": cod, "nome": nomes.get(cod), "rotulo": t["rotulo"], "pessoas": pessoas,
+                             "origem": t["origem"], "detalhe": detalhe, "por_modo": bool(t.get("por_modo")), "dias": dias})
+        proprios: dict[int, int] = defaultdict(int)
+        for e in c["equipe_semana"]:
+            proprios[(para_data(e["semana"]) - cal.semana0).days // 7] += e["contratados"]
+        serie = [proprios.get(w, 0) for w in range(max(proprios, default=-1) + 1)]
+        banco.regravar_terceirizados(c["id"], novos, contar_terceirizados(cal, posicoes, serie))
+        n += 1
+    cal_obra = banco.carregar_calendario(obra_id)
+    return {"recontados": n,
+            "precisa_recalcular": bool(cal_obra.get("max_pessoas_total") and cal_obra.get("contar_terceirizados", 1))}
 
 
 def exportar_equipe_excel(banco: Banco, obra_id: int, cenario_id: int | None = None) -> bytes:
@@ -1129,6 +1244,14 @@ def exportar_equipe_excel(banco: Banco, obra_id: int, cenario_id: int | None = N
     ws.append(["Total próprios", None, max(c["total_semana"], default=0), None, *c["total_semana"]])
     for cel in ws[ws.max_row]:
         cel.font = negrito
+    if c.get("terceirizados"):
+        for t in c["terceirizados"]:
+            ativas = [k for k, v in enumerate(t["pessoas"]) if v]
+            ws.append([t["nome"], c["semanas"][ativas[0]] if ativas else None, t["pico"],
+                       c["semanas"][ativas[-1]] if ativas else None, *t["pessoas"]])
+        ws.append(["Total na obra", None, max(c["total_obra"], default=0), None, *c["total_obra"]])
+        for cel in ws[ws.max_row]:
+            cel.font = negrito
     if c.get("equipe_indireta"):
         ws.append([])
         ws.append(["Equipe indireta (da mão de obra)"])
@@ -1147,14 +1270,17 @@ def exportar_equipe_excel(banco: Banco, obra_id: int, cenario_id: int | None = N
     ws2.column_dimensions["A"].width = 28
     ws3 = wb.create_sheet("Atividades")
     ws3.append(["Código", "Atividade", "Etapa", "Tipo", "Execução", "Início", "Término", "Duração", "Unidade", "Equipe",
-                "Folga (dias úteis)", "Crítica"])
+                "Folga (dias úteis)", "Crítica", "Terceirizado", "Pessoas do terceirizado", "Origem"])
     for cel in ws3[1]:
         cel.font = negrito
     destaque = PatternFill("solid", fgColor="FDE2E1")
     for a in sorted(c["atividades"], key=lambda a: (a["inicio"], a["ordem"])):
         ws3.append([a["codigo"], a["nome"], a["etapa"], a["tipo"], a["execucao"], a["inicio"], a["termino"], a["duracao"],
                     a["unidade"], ", ".join(f"{n} {f}" for f, n in a["equipe"].items()), a["folga"],
-                    "sim" if a["critica"] else ""])
+                    "sim" if a["critica"] else "", *((a["terceirizado"]["nome"] if a["terceirizado"].get("nome")
+                                                      else f"{a['terceirizado']['rotulo']} (terceirizado)",
+                                                      a["terceirizado"]["pessoas"], a["terceirizado"]["origem"])
+                                                     if a.get("terceirizado") else ())])
         if a["critica"]:
             for cel in ws3[ws3.max_row]:
                 cel.fill = destaque

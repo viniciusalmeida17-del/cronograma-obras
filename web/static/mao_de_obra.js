@@ -182,7 +182,7 @@ function desenharAtividades() {
     const bruto = soma(a.horas_brutas), ajust = soma(a.horas_ajustadas), eq = soma(a.horas_equipamento);
     const pend = !a.duracao || !a.execucao;
     return `<tr class="linha-ativ ${aberta ? "aberta" : ""} ${pend ? "pendente-linha" : ""}" data-codigo="${a.codigo}">
-      <td><span class="seta">${aberta ? "▾" : "▸"}</span> <b>${a.codigo}</b> ${esc(a.nome)}<span class="linha-excel">${a.n_itens} ${a.n_itens === 1 ? "item" : "itens"} · ${esc(a.etapa)}${a.trocas_aplicadas?.length ? ` · <span class="troca" title="${esc(a.trocas_aplicadas.map(textoTroca).join("\n"))}">função trocada</span>` : ""}</span></td>
+      <td><span class="seta">${aberta ? "▾" : "▸"}</span> <b>${a.codigo}</b> ${esc(a.nome)}<span class="linha-excel">${a.n_itens} ${a.n_itens === 1 ? "item" : "itens"} · ${esc(a.etapa)}${a.trocas_aplicadas?.length ? ` · <span class="troca" title="${esc(a.trocas_aplicadas.map(textoTroca).join("\n"))}">função trocada</span>` : ""}${a.terceirizado ? ` · <span class="${a.terceirizado.origem === "sem estimativa" ? "falta" : "troca"}" title="${esc(a.terceirizado.aviso || `origem: ${a.terceirizado.origem}`)}">${esc(a.terceirizado.nome)}: ${a.terceirizado.pessoas || "?"}</span>` : ""}</span></td>
       <td>${a.execucao ? `<span class="selo-exec ${a.execucao}">${a.execucao === "propria" ? "própria" : "terceirizada"}</span>` : '<span class="falta">escolher</span>'}</td>
       <td>${esc(a.funcao_principal || "—")}</td>
       <td class="num" title="${Object.entries(a.horas_ajustadas).map(([f, h]) => `${f}: ${horas(h)} h`).join("\n")}">${horas(bruto)} → <b>${horas(ajust)}</b></td>
@@ -215,6 +215,31 @@ function formTrocas(a) {
     </form>`;
 }
 
+const ORIGEM_PESSOAS = { "digitado": "digitado", "composição": "composição", "outras obras": "outras obras",
+  "biblioteca": "biblioteca", "sem estimativa": "sem estimativa" };
+
+function formTerceirizado(a) {
+  const t = a.terceirizado;
+  if (!t) return "";
+  const mudou = (a.rotulo_terceirizado || "") !== (a.rotulo_terceirizado_biblioteca || "");
+  const detalhe = Object.keys(t.detalhe || {}).length
+    ? ` (${Object.entries(t.detalhe).map(([f, n]) => `${n} ${esc(f.toLowerCase())}`).join(" + ")}${t.por_modo ? "; no cronograma vale a equipe escolhida pelo otimizador" : ""})` : "";
+  return `<form class="form-terceirizado" data-codigo="${a.codigo}">
+      <label>Nome do terceirizado <small>(atividades com o mesmo nome somam na semana)</small>
+        <input name="rotulo_terceirizado" value="${esc(a.rotulo_terceirizado || "")}" maxlength="60" placeholder="${esc(t.rotulo)}"></label>
+      <label>Pessoas do terceirizado
+        <input type="number" name="pessoas_terceirizado" min="1" max="500" step="1" value="${t.digitado ?? ""}" placeholder="${t.pessoas || "—"}">
+        <small>origem: <b>${ORIGEM_PESSOAS[t.origem] || esc(t.origem)}</b></small></label>
+      <label class="inline"><input type="checkbox" name="salvar_biblioteca"> salvar o nome também na biblioteca padrão</label>
+      <button type="submit" class="secundario">Salvar terceirizado</button>
+      <p class="discreto">Na contagem de pessoas: <b>${esc(t.nome)}: ${t.pessoas} pessoa(s)</b> · ${ORIGEM_PESSOAS[t.origem] || esc(t.origem)}${detalhe}
+        ${t.aviso ? `<br><span class="falta">${esc(t.aviso)}</span>` : ""}
+        ${mudou ? `<br><b>nome mudado nesta obra</b> (biblioteca: ${esc(a.rotulo_terceirizado_biblioteca || "vazio")})` : ""}
+        <br>Não muda custo nem ociosidade: o terceirizado é contrato fechado; a contagem é informativa.</p>
+      <p class="mensagem msg-terceirizado"></p>
+    </form>`;
+}
+
 function detalheAtividade(a, servs) {
   const c = a.calculo;
   const equipe = c ? Object.entries(c.equipe).map(([f, n]) => `${n} ${esc(f)} (${fmtH.format(c.dias_por_funcao[f])} d)`).join(" · ") : "—";
@@ -242,7 +267,7 @@ function detalheAtividade(a, servs) {
       <button type="submit" class="primario">Aplicar</button>
       <p class="mensagem msg-ativ"></p>
     </form>
-    ${formTrocas(a)}
+    ${a.execucao === "terceirizada" ? formTerceirizado(a) : formTrocas(a)}
     <p class="discreto">Equipe padrão: ${equipe}${maquinas ? `<br>Equipamentos: ${maquinas}` : ""}${c ? `<br>Duração exata ${fmtH.format(c.dias_exatos)} dias (limitada por ${{ equipamento: "equipamento", concretagem: `concretagem: ${fmtH.format(a.volume_m3 || 0)} m³` }[c.limitante] || "mão de obra"})` : ""}${a.duracao_fixa_dias ? `<br>Duração fixa da biblioteca: ${a.duracao_fixa_dias} dias corridos` : ""}</p>
     <table class="servicos"><thead><tr><th>Item</th><th class="desc">Serviço</th><th class="num">Quant.</th><th>Origem</th><th>Horas por função (h/un → total)</th><th></th></tr></thead><tbody>
     ${servs.map(linhaServico).join("")}
@@ -288,6 +313,24 @@ $("#tabela-atividades").addEventListener("click", (e) => {
   desenharAtividades();
 });
 $("#tabela-atividades").addEventListener("submit", (e) => {
+  const fterc = e.target.closest(".form-terceirizado");
+  if (fterc) {
+    e.preventDefault();
+    const cod = fterc.dataset.codigo;
+    const salvarBib = fterc.salvar_biblioteca.checked;
+    if (salvarBib && !confirm(`Gravar o nome do terceirizado de ${cod} também no Excel da biblioteca padrão? (Uma cópia de segurança será feita antes.)`)) return;
+    chamar(`/api/obras/${obraId}/atividade/${cod}/terceirizado`, { json: {
+      rotulo_terceirizado: fterc.rotulo_terceirizado.value, pessoas_terceirizado: fterc.pessoas_terceirizado.value,
+      salvar_biblioteca: salvarBib } }, $(".msg-terceirizado", fterc), "").then((ok) => {
+      if (!ok) return;
+      const ct = est.d.contagem || {};
+      mensagem($("#msg-geral"), `${cod}: terceirizado salvo.`
+        + (ct.recontados ? ` Contagem de pessoas refeita em ${ct.recontados} cenário(s).` : "")
+        + (ct.precisa_recalcular ? " O limite do canteiro conta os terceirizados: recalcule o cronograma." : "")
+        + (est.d.backup_biblioteca ? ` Biblioteca padrão gravada (cópia de segurança: ${est.d.backup_biblioteca}).` : ""), "ok");
+    });
+    return;
+  }
   const ft = e.target.closest(".form-trocas");
   if (ft) {
     e.preventDefault();
