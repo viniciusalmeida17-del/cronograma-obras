@@ -17,7 +17,8 @@ EXECUCOES = (PROPRIA, TERCEIRIZADA)
 INDIRETA = "indireta"
 
 PARAMETROS_PADRAO = {"horas_semana": 44.0, "dias_semana": 5, "rendimento": 0.90, "mudancas_jornada": [],
-                     "volume_caminhao": 8.0, "caminhoes_dia": 3, "juntar": {}}
+                     "volume_caminhao": 8.0, "caminhoes_dia": 3, "juntar": {},
+                     "concreto_caminhao_m3": 3.0}
 EQUIPE_PADRAO = 2
 EQUIPE_MAX = 20
 CONCRETAGEM = "concretagem"
@@ -63,45 +64,107 @@ SEM_ESTIMATIVA = "sem estimativa"
 AVISO_SEM_PESSOAS = "sem estimativa de pessoas: digite na mão de obra"
 
 
+def _fmt_h(h: float) -> str:
+    return f"{h:.1f}".replace(".", ",") if h < 10 else f"{h:.0f}"
+
+
 def nome_terceirizado(rotulo: str) -> str:
     return f"{rotulo} (terceirizado)"
+
+
+ORIGEM_EQUIPE_PADRAO = "equipe padrão"
+# origens da duração da terceirizada (ajuste 7.1)
+DUR_DIGITADA = "digitada"
+DUR_PRODUCAO_DIGITADA = "produção digitada"
+DUR_FIXA = "fixa da biblioteca"
 
 
 def terceirizado_da_atividade(ativ: Mapping[str, Any], ex: Mapping[str, Any], calc: Mapping[str, Any] | None,
                               ajustadas: Mapping[str, float], duracao: Mapping[str, Any] | None, horas_dia: float,
                               padrao_outras_obras: int | None = None) -> dict[str, Any]:
-    """Nome e pessoas do terceirizado (item 7). Pessoas, nesta ordem: digitado nesta obra → equipe da composição
-    (a do modo escolhido pelo otimizador; com duração digitada, teto(horas ÷ (dias × horas/dia)) por função) →
-    último valor digitado em outra obra → coluna pessoas_terceirizado da biblioteca → 0 (sem estimativa).
-
-    `por_modo`: a quantidade depende do modo (equipe) escolhido no cronograma; `pessoas` é a da equipe padrão.
+    """Nome e pessoas do terceirizado. Pessoas (ajuste 7.1), nesta ordem: digitado nesta obra → último valor
+    digitado em outra obra → pessoas_terceirizado da biblioteca → equipe_padrao da atividade → 0 (sem estimativa).
+    As horas da composição não definem mais a equipe: ficam só no detalhe (horas por função).
     """
     principal = (calc or {}).get("funcao_principal") or ativ.get("equipe_principal")
     rotulo = (ativ.get("rotulo_terceirizado") or "").strip() or principal or ativ.get("nome") or ativ.get("codigo")
-    horas = {f: h for f, h in ajustadas.items() if h > 0}
-    detalhe: dict[str, int] = {}
-    por_modo = False
     digitado = ex.get("pessoas_terceirizado")
+    equipe_padrao = ex.get("equipe_padrao") or ativ.get("equipe_padrao")
     if digitado:
         pessoas, origem = int(digitado), ORIGEM_DIGITADO
-    elif horas and duracao and duracao.get("tipo") == "manual" and duracao.get("dias"):
-        detalhe = {f: max(1, _teto(h / (duracao["dias"] * horas_dia))) for f, h in horas.items()}
-        pessoas, origem = sum(detalhe.values()), ORIGEM_COMPOSICAO
-    elif horas and calc and calc.get("equipe") and (duracao or {}).get("tipo") == "calculada":
-        detalhe = dict(calc["equipe"])
-        pessoas, origem, por_modo = sum(detalhe.values()), ORIGEM_COMPOSICAO, True
     elif padrao_outras_obras:
         pessoas, origem = int(padrao_outras_obras), ORIGEM_OUTRAS_OBRAS
     elif ativ.get("pessoas_terceirizado"):
         pessoas, origem = int(ativ["pessoas_terceirizado"]), ORIGEM_BIBLIOTECA
+    elif equipe_padrao:
+        pessoas, origem = int(equipe_padrao), ORIGEM_EQUIPE_PADRAO
     else:
         pessoas, origem = 0, SEM_ESTIMATIVA
     return {"rotulo": rotulo, "nome": nome_terceirizado(rotulo), "rotulo_obra": ativ.get("rotulo_terceirizado") or "",
             "rotulo_biblioteca": ativ.get("rotulo_terceirizado_biblioteca") or "",
-            "pessoas": pessoas, "origem": origem, "detalhe": detalhe, "por_modo": por_modo,
+            "pessoas": pessoas, "origem": origem, "detalhe": {}, "por_modo": False,
+            "horas_composicao": {f: round(h, 2) for f, h in ajustadas.items() if h > 0},
             "digitado": int(digitado) if digitado else None, "padrao_outras_obras": padrao_outras_obras,
             "pessoas_biblioteca": ativ.get("pessoas_terceirizado"),
             "aviso": AVISO_SEM_PESSOAS if origem == SEM_ESTIMATIVA else None}
+
+
+def quantidades_por_unidade(servicos: Iterable[Mapping[str, Any]]) -> dict[str, float]:
+    q: dict[str, float] = defaultdict(float)
+    for s in servicos:
+        if s.get("unidade"):
+            q[unidade_canonica(s["unidade"])] += s.get("quantidade") or 0.0
+    return dict(q)
+
+
+def duracao_terceirizada(ativ: Mapping[str, Any], ex: Mapping[str, Any], quantidades: Mapping[str, float],
+                         ajustadas: Mapping[str, float], equip: Mapping[str, float], calc: Mapping[str, Any] | None,
+                         pessoas: int, horas_dia: float, producao_outras_obras: str | None = None
+                         ) -> tuple[dict[str, Any] | None, list[str]]:
+    """Duração da instalação da terceirizada (ajuste 7.1), nesta ordem: digitada → produção digitada (ou padrão de
+    outras obras) → producao_terceirizado da biblioteca → horas da composição ÷ (pessoas × horas/dia) (ou as horas de
+    equipamento ÷ máquinas, o maior) → nenhuma (None: pendência). Devolve (duração, avisos)."""
+    from atividades.biblioteca import formatar_producao, interpretar_producao
+
+    avisos: list[str] = []
+    if ex.get("duracao_manual"):
+        return {"dias": int(ex["duracao_manual"]), "unidade": "uteis", "tipo": "manual", "origem": DUR_DIGITADA}, avisos
+    if ativ.get("duracao_fixa_dias"):
+        return {"dias": int(ativ["duracao_fixa_dias"]), "unidade": "corridos", "tipo": "fixa", "origem": DUR_FIXA}, avisos
+    opcoes = []
+    if ex.get("producao_terceirizado"):
+        opcoes.append((ex["producao_terceirizado"], DUR_PRODUCAO_DIGITADA))
+    elif producao_outras_obras:
+        opcoes.append((producao_outras_obras, ORIGEM_OUTRAS_OBRAS))
+    if ativ.get("producao_terceirizado"):
+        opcoes.append((ativ["producao_terceirizado"], ORIGEM_BIBLIOTECA))
+    for texto, origem in opcoes:
+        try:
+            prod = interpretar_producao(texto)
+        except ValueError as e:
+            avisos.append(f"{ativ.get('codigo')}: {e}.")
+            continue
+        if not prod:
+            continue
+        valor, un = prod
+        base = {"unidade": "uteis", "tipo": "producao", "origem": origem, "producao": formatar_producao(prod)}
+        if un is None:
+            return {**base, "dias": max(1, _teto(valor))}, avisos
+        qtd = quantidades.get(unidade_canonica(un), 0.0)
+        if qtd <= 0:
+            avisos.append(f"{ativ.get('codigo')}: produção '{formatar_producao(prod)}' ({origem}), mas nenhum serviço "
+                          f"da atividade está em {un}; usando a opção seguinte.")
+            continue
+        return {**base, "dias": max(1, _teto(qtd / valor)), "quantidade": round(qtd, 4), "unidade_producao": un}, avisos
+    horas = {f: h for f, h in ajustadas.items() if h > 0}
+    eq = {e: h for e, h in equip.items() if h > 0}
+    if (horas or eq) and pessoas > 0:
+        dias = sum(horas.values()) / (pessoas * horas_dia) if horas else 0.0
+        maq = (calc or {}).get("maquinas") or {}
+        for e, h in eq.items():
+            dias = max(dias, h / (max(1, int(maq.get(e) or 1)) * horas_dia))
+        return {"dias": max(1, _teto(dias)), "unidade": "uteis", "tipo": "composicao", "origem": ORIGEM_COMPOSICAO}, avisos
+    return None, avisos
 
 
 def texto_detalhe(detalhe: Mapping[str, int]) -> str:
@@ -308,6 +371,8 @@ def calcular_obra(
     parametros: Mapping[str, Any],
     prazo: tuple[float | None, str | None] = (None, None),
     pessoas_padrao: Mapping[str, int] | None = None,
+    producao_padrao: Mapping[str, str] | None = None,
+    funcoes_terceirizadas: Iterable[str] = (),
 ) -> dict[str, Any]:
     """Resumo por atividade e da obra. `execucao`: codigo -> {execucao, rendimento, equipe_padrao, duracao_manual}."""
     params = {**PARAMETROS_PADRAO, **{k: v for k, v in parametros.items() if v is not None}}
@@ -348,6 +413,13 @@ def calcular_obra(
                 equip[e] += h * qtd
             custo_por_origem[a["origem"]] += s.get("total") or 0.0
             custo_origem_ativ[a["origem"]] += s.get("total") or 0.0
+        # ajuste 7.1: em atividade própria, horas de função que a empresa não tem (Serralheiro, Montador) ficam fora
+        horas_de_terceirizado: dict[str, float] = {}
+        if ex.get("execucao") == PROPRIA:
+            for f in [f for f in brutas if f in set(funcoes_terceirizadas)]:
+                if brutas[f] > 0:
+                    horas_de_terceirizado[f] = round(brutas[f], 2)
+                del brutas[f]
         juntar = params.get("juntar") or {}
         # ordem (item 6): composição → funcoes.xlsx → trocar_funcoes da atividade → juntar funções
         trocas = trocas_da_atividade(ativ) if ex.get("execucao") == PROPRIA else []
@@ -370,7 +442,18 @@ def calcular_obra(
         calc = calcular_duracao(ajustadas, equip, equipe_padrao, hd, ex.get("maquinas"), minimo, principal_forcada)
         execucao_escolhida = ex.get("execucao")
 
-        if ex.get("duracao_manual"):
+        terceirizado = None
+        avisos_terc: list[str] = []
+        if execucao_escolhida == TERCEIRIZADA:
+            terceirizado = terceirizado_da_atividade(ativ, ex, calc, ajustadas, None, hd, (pessoas_padrao or {}).get(cod))
+            duracao, avisos_terc = duracao_terceirizada(ativ, ex, quantidades_por_unidade(servs), ajustadas, equip, calc,
+                                                        terceirizado["pessoas"], hd, (producao_padrao or {}).get(cod))
+            terceirizado["duracao_origem"] = (duracao or {}).get("origem")
+            terceirizado["duracao_tipo"] = (duracao or {}).get("tipo")
+            terceirizado["producao"] = (duracao or {}).get("producao")
+            for t in avisos_terc:
+                avisos.append({"atividade": cod, "mensagem": t})
+        elif ex.get("duracao_manual"):
             duracao = {"dias": ex["duracao_manual"], "unidade": "uteis", "tipo": "manual"}
         elif ativ.get("duracao_fixa_dias"):
             duracao = {"dias": ativ["duracao_fixa_dias"], "unidade": "corridos", "tipo": "fixa"}
@@ -382,14 +465,14 @@ def calcular_obra(
             pendencias.append({"tipo": "execucao", "atividade": cod,
                                "mensagem": f"{cod}: escolha se a execução é própria ou terceirizada."})
         if duracao is None:
-            motivo = "terceirizada sem horas" if execucao_escolhida == TERCEIRIZADA else "sem horas de mão de obra"
-            pendencias.append({"tipo": "duracao", "atividade": cod,
-                               "mensagem": f"{cod}: {motivo}; informe a duração em dias úteis."})
+            if execucao_escolhida == TERCEIRIZADA:
+                msg = f"{cod}: terceirizada sem produção nem horas; informe a produção (ex.: 150 M2/dia) ou a duração."
+            else:
+                msg = f"{cod}: sem horas de mão de obra; informe a duração em dias úteis."
+            pendencias.append({"tipo": "duracao", "atividade": cod, "mensagem": msg})
         if execucao_escolhida == PROPRIA:
             for f, h in ajustadas.items():
                 horas_funcao_propria[f] += h
-        terceirizado = (terceirizado_da_atividade(ativ, ex, calc, ajustadas, duracao, hd, (pessoas_padrao or {}).get(cod))
-                        if execucao_escolhida == TERCEIRIZADA else None)
         resultado_ativ.append({
             "codigo": cod, "nome": ativ.get("nome"), "etapa": ativ.get("etapa"), "tipo": ativ["tipo"],
             "execucao": execucao_escolhida, "execucao_padrao": ativ.get("execucao_padrao") or PROPRIA,
@@ -402,6 +485,9 @@ def calcular_obra(
             "trocar_funcoes": ativ.get("trocar_funcoes") or "",
             "trocar_funcoes_biblioteca": ativ.get("trocar_funcoes_biblioteca") or "",
             "trocas_aplicadas": trocas_aplicadas,
+            "horas_de_terceirizado": horas_de_terceirizado,
+            "avisos_terceirizado": [f"{_fmt_h(h)} h de {f} são de terceirizado e não entram na equipe própria"
+                                    for f, h in horas_de_terceirizado.items()],
             "horas_ajustadas": {f: round(h, 2) for f, h in sorted(ajustadas.items(), key=lambda x: -x[1])},
             "horas_por_origem": {o: round(h, 2) for o, h in por_origem.items() if h},
             "custo_por_origem": {o: round(c, 2) for o, c in custo_origem_ativ.items() if c},

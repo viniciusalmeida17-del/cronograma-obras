@@ -17,8 +17,9 @@ INICIO = "2025-03-03"
 TEMPO = 12  # segundos por cenário nos testes
 
 
-# durações digitadas para as terceirizadas sem horas (item 1 da etapa 5.1)
-DURACOES_TERCEIRIZADAS = {"MET-01": 40, "QUA-03": 15, "SER-02": 20, "ESQ-01": 5, "EXA-01": 5, "PEX-04": 5}
+# durações digitadas para as terceirizadas sem horas (item 1 da etapa 5.1). Desde o ajuste 7.1 a produção da
+# biblioteca (producao_terceirizado) cobre todas as terceirizadas da planilha de teste.
+DURACOES_TERCEIRIZADAS: dict[str, int] = {}
 
 
 def resolver_pendencias(banco, obra, biblioteca):
@@ -46,8 +47,9 @@ def obra_pronta(tmp_path_factory, arquivo_teste, biblioteca):
 @pytest.fixture(scope="module")
 def comparacao(obra_pronta, biblioteca):
     banco, obra = obra_pronta
-    # 6 meses não cabe (diagnóstico); 13 é maior que o prazo da licitação e não é calculado
-    return etapa5.calcular_cenarios(banco, obra, [6, 12, 13], biblioteca, TEMPO)
+    # 5 meses não cabe (diagnóstico; desde o ajuste 7.1 o menor prazo é ~5,9 meses, com as terceirizadas pela
+    # produção da instalação); 13 é maior que o prazo da licitação e não é calculado
+    return etapa5.calcular_cenarios(banco, obra, [5, 12, 13], biblioteca, TEMPO)
 
 
 def _cenario(comparacao, prazo):
@@ -137,8 +139,8 @@ def test_indiretos_que_variam_com_o_prazo(obra_pronta, biblioteca):
 
 def test_tabela_tem_uma_linha_por_prazo(comparacao):
     """Cenários só até o prazo da licitação (13 não entra); o de 12 é o principal."""
-    assert [c["prazo_meses"] for c in comparacao["cenarios"]] == [6.0, 12.0]
-    seis = _cenario(comparacao, 6.0)
+    assert [c["prazo_meses"] for c in comparacao["cenarios"]] == [5.0, 12.0]
+    seis = _cenario(comparacao, 5.0)
     assert seis["situacao"] == "impossivel"
     assert seis["menor_prazo"]["dias_uteis"] > 0 and seis["menor_prazo"]["caminho_critico"][-1] == "LIM-01"
     doze = _cenario(comparacao, 12.0)
@@ -152,7 +154,7 @@ def test_tabela_tem_uma_linha_por_prazo(comparacao):
 
 def test_diagnostico_quando_nao_cabe(comparacao):
     """Prazo impossível: caminho crítico com duração, equipe e máquinas, e sugestões com o ganho calculado."""
-    d = _cenario(comparacao, 6.0)["diagnostico"]
+    d = _cenario(comparacao, 5.0)["diagnostico"]
     assert d["menor_prazo"]["dias_uteis"] > d["dias_uteis_limite"]
     cadeia = d["caminho_critico"]
     assert cadeia[0]["codigo"] == "PRE-01" and cadeia[-1]["codigo"] == "LIM-01"
@@ -237,7 +239,7 @@ def test_periodos_das_indiretas(obra_pronta, comparacao):
 
 def test_escolher_cenario_e_exportar(obra_pronta, comparacao):
     banco, obra = obra_pronta
-    dez, doze = _cenario(comparacao, 6.0), _cenario(comparacao, 12.0)
+    dez, doze = _cenario(comparacao, 5.0), _cenario(comparacao, 12.0)
     with pytest.raises(etapa5.ErroCronograma):
         etapa5.escolher_cenario(banco, obra, dez["id"])
     etapa5.escolher_cenario(banco, obra, doze["id"])

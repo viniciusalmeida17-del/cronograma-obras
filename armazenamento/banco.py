@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS servicos (
     status_ligacao        TEXT,            -- automatico, memoria, confirmado, ambiguo, sem_regra
     regra_usada           INTEGER,         -- número (ordem) da regra da biblioteca
     origem_horas          TEXT,            -- etapa 4: composicao, banco, estimado, manual, sem_mao_de_obra
+    concreto              TEXT,            -- ajuste 7.1: JSON {caminhao: {volume_m3, motivo, horas_retiradas}} ou betoneira
     -- previstos para as próximas etapas
     etapa_obra            TEXT,
     local                 TEXT
@@ -111,6 +112,8 @@ CREATE TABLE IF NOT EXISTS obra_atividades (
     rotulo_terceirizado   TEXT,            -- item 7: nome do terceirizado nesta obra ('' = padrão)
     rotulo_terceirizado_biblioteca TEXT,   -- o que veio da biblioteca
     pessoas_terceirizado  INTEGER,         -- item 7: pessoas do terceirizado da biblioteca
+    producao_terceirizado TEXT,            -- ajuste 7.1: produção de instalação da biblioteca
+    prazo_entrega_dias    INTEGER,         -- ajuste 7.1: prazo de entrega da biblioteca (dias corridos)
     PRIMARY KEY (obra_id, codigo)
 );
 
@@ -140,15 +143,19 @@ COLUNAS_OBRA_ATIVIDADE = (
     "execucao_padrao", "equipe_padrao", "equipe_max", "duracao_fixa_dias", "tipo_producao",
     "trocar_funcoes", "trocar_funcoes_biblioteca", "fonte", "deps_prazos", "deps_editadas",
     "rotulo_terceirizado", "rotulo_terceirizado_biblioteca", "pessoas_terceirizado",
+    "producao_terceirizado", "prazo_entrega_dias",
 )
 # Colunas acrescentadas depois da etapa 2 (migração de bancos antigos)
 MIGRACOES = {
-    "servicos": {"status_ligacao": "TEXT", "regra_usada": "INTEGER", "origem_horas": "TEXT"},
+    "servicos": {"status_ligacao": "TEXT", "regra_usada": "INTEGER", "origem_horas": "TEXT", "concreto": "TEXT"},
     "obras": {"arquivo_salvo": "TEXT", "composicoes_abas": "TEXT", "prazos_espera": "TEXT"},
     "atividade_resumo": {"maquinas": "TEXT"},
     "atividade_execucao": {"equipe_travada": "INTEGER", "producao_dia": "REAL", "maquinas_max": "INTEGER",
-                           "pessoas_terceirizado": "INTEGER"},
-    "obra_parametros": {"volume_caminhao": "REAL", "caminhoes_dia": "REAL", "juntar": "TEXT"},
+                           "pessoas_terceirizado": "INTEGER", "producao_terceirizado": "TEXT",
+                           "prazo_entrega_dias": "INTEGER"},
+    "producao_padrao": {"texto": "TEXT"},
+    "obra_parametros": {"volume_caminhao": "REAL", "caminhoes_dia": "REAL", "juntar": "TEXT",
+                        "concreto_caminhao_m3": "REAL"},
     "obra_calendario": {"transferiveis": "TEXT", "min_semanas_reducao": "INTEGER", "custo_troca": "REAL",
                         "salarios": "TEXT", "encargos": "REAL", "indiretos_reais": "TEXT", "terceirizados": "TEXT",
                         "criterios": "TEXT", "maquinas_max": "INTEGER", "dividir_terceirizadas": "INTEGER",
@@ -162,7 +169,8 @@ MIGRACOES = {
                         "duracao_fixa_dias": "INTEGER", "tipo_producao": "TEXT", "trocar_funcoes": "TEXT",
                         "trocar_funcoes_biblioteca": "TEXT", "fonte": "TEXT", "deps_prazos": "TEXT",
                         "deps_editadas": "INTEGER DEFAULT 0", "rotulo_terceirizado": "TEXT",
-                        "rotulo_terceirizado_biblioteca": "TEXT", "pessoas_terceirizado": "INTEGER"},
+                        "rotulo_terceirizado_biblioteca": "TEXT", "pessoas_terceirizado": "INTEGER",
+                        "producao_terceirizado": "TEXT", "prazo_entrega_dias": "INTEGER"},
     "obra_dependencias": {"tipo": "TEXT NOT NULL DEFAULT 'TI'", "unidade": "TEXT NOT NULL DEFAULT 'd'"},
 }
 def _coluna_atividade(a: dict[str, Any], c: str) -> Any:

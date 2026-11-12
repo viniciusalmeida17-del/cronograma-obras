@@ -328,7 +328,8 @@ def criar_app(
 
     @app.post("/api/obras/<int:obra_id>/parametros")
     def parametros(obra_id):
-        etapa4.salvar_parametros(banco, obra_id, request.get_json(silent=True) or {})
+        if etapa4.salvar_parametros(banco, obra_id, request.get_json(silent=True) or {}) and banco.arquivo_da_obra(obra_id):
+            return jsonify(etapa4.analisar_obra(banco, obra_id, _biblioteca_opcional()))   # concreto de caminhão mudou
         return _estado(obra_id)
 
     @app.post("/api/obras/<int:obra_id>/execucao")
@@ -364,6 +365,10 @@ def criar_app(
             campos["rotulo"] = dados["rotulo_terceirizado"]
         if "pessoas_terceirizado" in dados:
             campos["pessoas"] = dados["pessoas_terceirizado"]
+        for chave, nome in (("producao_terceirizado", "producao"), ("prazo_entrega_dias", "prazo_entrega"),
+                            ("duracao_manual", "duracao")):
+            if chave in dados:
+                campos[nome] = dados[chave]
         estado = etapa4.definir_terceirizado(banco, obra_id, codigo, salvar_biblioteca=bool(dados.get("salvar_biblioteca")),
                                              caminho_biblioteca=caminho_biblioteca, biblioteca=_biblioteca_opcional(),
                                              **campos)
@@ -371,6 +376,8 @@ def criar_app(
             estado["contagem"] = etapa5.recontar_terceirizados(banco, obra_id, _biblioteca_opcional())
         except etapa5.ErroCronograma:
             estado["contagem"] = {"recontados": 0, "precisa_recalcular": False}
+        if {"pessoas", "producao", "duracao"} & set(campos):   # a duração da instalação pode ter mudado
+            estado["contagem"]["precisa_recalcular"] = True
         return jsonify(estado)
 
     @app.post("/api/obras/<int:obra_id>/servico/<int:servico_id>/horas")

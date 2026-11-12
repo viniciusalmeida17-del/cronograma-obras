@@ -50,6 +50,26 @@ class BancoVazio:
         return None
 
 
+CONCRETO_CAMINHAO_M3 = 3.0   # ajuste 7.1: padrão "concreto de caminhão a partir de" (m³ por serviço)
+
+
+def eh_concreto(descricao: Any, unidade: Any) -> bool:
+    """Subcomposição de produção de concreto (betoneira ou usinado), em m³. Lançamento/adensamento não é."""
+    d = normalizar(descricao)
+    return unidade_norm(unidade) == "M3" and (d.startswith("CONCRETO") or (d.startswith("PREPARO") and "CONCRETO" in d))
+
+
+def concreto_de_caminhao(descricao: Any, volume_m3: float, minimo_m3: float) -> str | None:
+    """Motivo se o concreto do serviço vem de caminhão (usinado/bombeado ou volume grande); None se é de betoneira."""
+    d = normalizar(descricao)
+    for termo in ("USINADO", "BOMBEADO"):
+        if termo in d:
+            return f"descrição com {termo}"
+    if volume_m3 >= minimo_m3 > 0:
+        return f"{volume_m3:.1f} m³ ≥ {minimo_m3:g} m³".replace(".", ",")
+    return None
+
+
 def chave_codigo(codigo: Any) -> str:
     return normalizar(codigo).replace(" ", "")
 
@@ -64,6 +84,9 @@ class AnaliseComposicao:
     expandidos: list[dict[str, Any]] = field(default_factory=list)
     # funcao -> [horas, R$, horas "com encargos", R$ "com encargos"] das linhas de mão de obra com preço
     custos: dict[str, list[float]] = field(default_factory=lambda: defaultdict(lambda: [0.0, 0.0, 0.0, 0.0]))
+    # ajuste 7.1: produção de concreto (subcomposições de concreto do banco, da referência ou pendentes)
+    concreto: dict[tuple[str, str], float] = field(default_factory=lambda: defaultdict(float))
+    concreto_m3: float = 0.0          # m³ de concreto por unidade do serviço
 
     def total_horas(self) -> float:
         return sum(self.horas.values())
@@ -78,6 +101,7 @@ class Analisador:
         codigo_para_item: Mapping[str, str],
         banco: ConsultaBanco | None = None,
         referencias: Mapping[str, Mapping[str, float]] | None = None,
+        concreto_caminhao_m3: float = CONCRETO_CAMINHAO_M3,
     ):
         self.composicoes = composicoes
         self.funcoes = funcoes
@@ -85,6 +109,7 @@ class Analisador:
         self.codigo_para_item = codigo_para_item
         self.banco = banco or BancoVazio()
         self.referencias = referencias or {}  # código normalizado -> {funcao: h/un} (produtividade_referencia.xlsx)
+        self.concreto_caminhao_m3 = concreto_caminhao_m3
         self._memo: dict[str, AnaliseComposicao] = {}
 
     def analisar_composicao(self, item: str, pilha: tuple[str, ...] = ()) -> AnaliseComposicao:
@@ -132,6 +157,9 @@ class Analisador:
                     res.horas[chave] += h * coef
                 for nome, h in sub.equipamentos.items():
                     res.equipamentos[nome] += h * coef
+                for chave, h in sub.concreto.items():
+                    res.concreto[chave] += h * coef
+                res.concreto_m3 += sub.concreto_m3 * coef + (coef if eh_concreto(linha.descricao, linha.unidade) else 0.0)
                 for funcao, valores in sub.custos.items():
                     acc = res.custos[funcao]
                     for k, v in enumerate(valores):
@@ -143,24 +171,30 @@ class Analisador:
                 res.expandidos.append({"codigo": linha.codigo, "item": sub_item, "coeficiente": coef,
                                        "horas_un": sub.total_horas() * coef})
                 continue
+            concreto = eh_concreto(linha.descricao, linha.unidade)
+            if concreto:
+                res.concreto_m3 += coef
+            destino = res.concreto if concreto else res.horas
             do_banco = self.banco.buscar_codigo(codigo) if codigo else None
             if do_banco:
                 for funcao, h in do_banco.items():
-                    res.horas[(funcao, BANCO)] += h * coef
+                    destino[(funcao, BANCO)] += h * coef
                 res.expandidos.append({"codigo": linha.codigo, "item": None, "coeficiente": coef,
-                                       "horas_un": sum(do_banco.values()) * coef, "banco": True})
+                                       "horas_un": sum(do_banco.values()) * coef, "banco": True, "concreto": concreto})
                 continue
             da_referencia = self.referencias.get(codigo) if codigo else None
             if da_referencia:
                 for funcao, h in da_referencia.items():
-                    res.horas[(funcao, REFERENCIA)] += h * coef
+                    destino[(funcao, REFERENCIA)] += h * coef
                 res.expandidos.append({"codigo": linha.codigo, "item": None, "coeficiente": coef,
-                                       "horas_un": sum(da_referencia.values()) * coef, "referencia": True})
+                                       "horas_un": sum(da_referencia.values()) * coef, "referencia": True,
+                                       "concreto": concreto})
                 continue
             if eh_subcomposicao(linha.descricao, self.palavras):
                 res.pendentes.append({"codigo": linha.codigo, "descricao": linha.descricao,
                                       "unidade": None if linha.unidade is None else str(linha.unidade),
-                                      "coeficiente": coef, "total_linha": linha.total or 0.0, "via": []})
+                                      "coeficiente": coef, "total_linha": linha.total or 0.0, "via": [],
+                                      "concreto": concreto})
         self._memo[item] = res
         return res
 
@@ -195,6 +229,23 @@ class Analisador:
                            for f, v in a.custos.items() if v[0] > 0 and v[1] > 0},
             )
             horas = {k: v for k, v in a.horas.items() if v}
+            tem_concreto = bool(a.concreto) or any(p.get("concreto") for p in a.pendentes)
+            if tem_concreto:
+                qtd = servico.get("quantidade") or 0.0
+                volume = qtd if unidade_norm(servico.get("unidade")) == "M3" else qtd * a.concreto_m3
+                motivo = concreto_de_caminhao(servico.get("descricao"), volume, self.concreto_caminhao_m3)
+                horas_concreto = sum(a.concreto.values()) * qtd
+                if motivo:
+                    # concreto de caminhão: a produção do concreto não tem horas (fica lançamento/acabamento)
+                    base["pendentes"] = [p for p in base["pendentes"] if not p.get("concreto")]
+                    base["concreto_caminhao"] = {"volume_m3": round(volume, 2), "motivo": motivo,
+                                                 "horas_retiradas": round(horas_concreto, 2),
+                                                 "pendentes_retiradas": sum(1 for p in a.pendentes if p.get("concreto"))}
+                else:
+                    for k, v in a.concreto.items():
+                        if v:
+                            horas[k] = horas.get(k, 0.0) + v
+                    base["concreto_betoneira"] = {"volume_m3": round(volume, 2)}
         else:
             horas = {}
 

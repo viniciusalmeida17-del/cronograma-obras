@@ -42,10 +42,11 @@ def _ativ(estado, cod):
 # ------------------------------------------------------------------ biblioteca
 
 
-def test_biblioteca_tem_21_colunas_e_as_duas_novas_no_fim():
+def test_biblioteca_tem_as_duas_colunas_do_item7():
+    """Item 7: 21 colunas, as duas últimas novas (o ajuste 7.1 acrescentou mais duas depois delas)."""
     ws = openpyxl.load_workbook(BIBLIOTECA, read_only=True)["Atividades"]
     cab = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
-    assert len(cab) == 21 and tuple(cab[-2:]) == COLUNAS_ITEM7
+    assert len(cab) >= 21 and tuple(cab[19:21]) == COLUNAS_ITEM7
 
 
 def test_colunas_novas_lidas_pelo_nome(tmp_path, biblioteca):
@@ -123,10 +124,11 @@ def test_pessoas_digitado_ganha_de_tudo():
     assert (t["pessoas"], t["origem"]) == (9, ORIGEM_DIGITADO)
 
 
-def test_pessoas_composicao_ganha_de_outras_obras_e_biblioteca():
+def test_horas_da_composicao_nao_definem_mais_a_equipe():
+    """Ajuste 7.1: com horas na composição, valem outras obras / biblioteca; as horas ficam só no detalhe."""
     t = terceirizado_da_atividade(ATIV, {}, CALC, HORAS, CALCULADA, 8.8, 5)
-    assert (t["pessoas"], t["origem"], t["por_modo"]) == (5, ORIGEM_COMPOSICAO, True)
-    assert t["detalhe"] == {"Montador": 3, "Servente": 2}
+    assert (t["pessoas"], t["origem"], t["por_modo"]) == (5, ORIGEM_OUTRAS_OBRAS, False)
+    assert t["horas_composicao"] == HORAS
 
 
 def test_pessoas_outras_obras_ganha_da_biblioteca():
@@ -141,13 +143,6 @@ def test_pessoas_biblioteca_e_sem_estimativa():
                                   8.8, None)
     assert (t["pessoas"], t["origem"]) == (0, SEM_ESTIMATIVA)
     assert t["aviso"] == "sem estimativa de pessoas: digite na mão de obra"
-
-
-def test_composicao_com_duracao_digitada():
-    """176 h em 10 dias úteis de 8,8 h → 2 pessoas."""
-    t = terceirizado_da_atividade(ATIV, {}, {"funcao_principal": "Montador", "equipe": {"Montador": 2}},
-                                  {"Montador": 176.0}, {"tipo": "manual", "dias": 10}, 8.8, 5)
-    assert (t["pessoas"], t["origem"], t["por_modo"]) == (2, ORIGEM_COMPOSICAO, False)
 
 
 # ------------------------------------------------------------------ contagem por semana
@@ -302,7 +297,8 @@ def test_digitar_pessoas_recalcula_so_a_contagem_e_vira_padrao(obra7, biblioteca
     j = r.get_json()
     t = _ativ(j, "MET-01")["terceirizado"]
     assert (t["pessoas"], t["origem"], t["nome"]) == (5, ORIGEM_DIGITADO, "Metálica (terceirizado)")
-    assert j["contagem"]["recontados"] == 1 and not j["contagem"]["precisa_recalcular"]
+    # ajuste 7.1: mudar as pessoas pode mudar a duração da instalação: a tela avisa para recalcular
+    assert j["contagem"]["recontados"] == 1 and j["contagem"]["precisa_recalcular"]
     assert carregar_biblioteca(caminho).atividades["MET-01"].rotulo_terceirizado == "Metálica"
     depois = etapa5.detalhe_cenario(banco, obra, cid)
     assert depois["calculado_em"] == antes["calculado_em"] and depois["termino"] == antes["termino"]

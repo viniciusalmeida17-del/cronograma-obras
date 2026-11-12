@@ -18,7 +18,8 @@ CAMINHO_REFERENCIAS = RAIZ / "dados" / "produtividade_referencia.xlsx"
 
 PRODUCAO = "producao"
 INDIRETA = "indireta"
-CATEGORIAS = (PRODUCAO, INDIRETA)
+TERCEIRIZADO = "terceirizado"   # ajuste 7.1: função que a empresa não tem (Serralheiro, Montador)
+CATEGORIAS = (PRODUCAO, INDIRETA, TERCEIRIZADO)
 
 UNIDADES_MAO_DE_OBRA = {"H", "HORA", "HORAS", "MES", ""}
 UNIDADES_EQUIPAMENTO = {"CHP", "CHI"}
@@ -64,7 +65,17 @@ class TabelaFuncoes:
         return None
 
     def funcoes(self) -> list[str]:
+        """Funções da empresa (sem as de categoria terceirizado)."""
+        terc = self.funcoes_terceirizadas()
+        return [f for f in dict.fromkeys(r.funcao for r in self.regras) if f not in terc]
+
+    def todas_funcoes(self) -> list[str]:
         return list(dict.fromkeys(r.funcao for r in self.regras))
+
+    def funcoes_terceirizadas(self) -> set[str]:
+        """Funções que a empresa não tem: só aparecem em categoria terceirizado (nenhuma regra de produção)."""
+        prod = {r.funcao for r in self.regras if r.categoria != TERCEIRIZADO}
+        return {r.funcao for r in self.regras if r.categoria == TERCEIRIZADO and r.funcao not in prod}
 
 
 def carregar_funcoes(caminho: str | os.PathLike | None = None) -> TabelaFuncoes:
@@ -100,7 +111,7 @@ def carregar_funcoes(caminho: str | os.PathLike | None = None) -> TabelaFuncoes:
         if not funcao:
             erros.append({"linha": n, "mensagem": "funcao vazia."})
         if categoria not in CATEGORIAS:
-            erros.append({"linha": n, "mensagem": f"categoria '{categoria}' inválida (use producao ou indireta)."})
+            erros.append({"linha": n, "mensagem": f"categoria '{categoria}' inválida (use producao, indireta ou terceirizado)."})
         ordem = para_numero(val("ordem"))
         if termos and funcao and categoria in CATEGORIAS:
             regras.append(RegraFuncao(int(ordem) if ordem is not None else n, termos, funcao, categoria, n))

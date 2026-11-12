@@ -245,6 +245,9 @@ def modos_da_atividade(a: Mapping[str, Any], travada: int | None = None, jornada
     tem_horas = bool(a.get("horas_ajustadas") or a.get("horas_equipamento"))
     if dur.get("tipo") == "fixa" or dur.get("unidade") == "corridos":
         return [Modo(dias_corridos=int(dur["dias"]))]
+    if execucao == TERCEIRIZADA and (dur.get("dias") or dias_uteis):
+        # ajuste 7.1: terceirizada tem um modo só (pessoas e duração fixas); o otimizador não escolhe equipe
+        return [Modo(dias_uteis=int(dias_uteis or dur["dias"]))]
     if dur.get("tipo") == "manual" or dias_uteis:
         equipe = dict(calc.get("equipe") or {}) if execucao != TERCEIRIZADA else {}
         return [Modo(equipe=equipe, dias_uteis=int(dias_uteis or dur["dias"]))]

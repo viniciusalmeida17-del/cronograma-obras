@@ -476,3 +476,7 @@ i.linha-total { display: inline-block; width: 18px; height: 0; border-top: 2px s
 table.equipe-semana tr.terceirizado td { color: #6b4a1f; background: #fbf6ee; }
 table.equipe-semana tr.terceirizado td:first-child { font-style: italic; }
 .aviso-sem-estimativa { background: #fff4d6; border-left: 3px solid #e0b000; padding: 6px 10px; }
+
+/* ajuste 7.1 */
+.concreto-caminhao { display: block; font-size: 11px; color: #2c5f8a; background: #eaf2fa; border-radius: 3px; padding: 1px 6px; margin-top: 2px; width: fit-content; }
+#conferir-terceirizadas input { font-size: 13px; }

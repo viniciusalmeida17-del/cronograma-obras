@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS obra_parametros (
     mudancas_jornada      TEXT,               -- JSON: [{"a_partir_de": "AAAA-MM-DD", "horas_semana": 42}]
     volume_caminhao       REAL,               -- etapa 5.1: m³ por caminhão de concreto (padrão 8)
     caminhoes_dia         REAL,               -- etapa 5.1: caminhões de concreto por dia (padrão 3)
-    juntar                TEXT                -- etapa 5.1: JSON funcao -> destino; NULL = padrão da funcoes.xlsx
+    juntar                TEXT,               -- etapa 5.1: JSON funcao -> destino; NULL = padrão da funcoes.xlsx
+    concreto_caminhao_m3  REAL                -- ajuste 7.1: concreto de caminhão a partir de (m³ por serviço)
 );
 
 CREATE TABLE IF NOT EXISTS servico_mao_de_obra (
@@ -67,6 +68,8 @@ CREATE TABLE IF NOT EXISTS atividade_execucao (
     producao_dia          REAL,               -- etapa 5.1: terceirizada, produção por dia (duração = qtd ÷ produção)
     maquinas_max          INTEGER,            -- etapa 5.1: máximo de máquinas de cada equipamento (padrão 6)
     pessoas_terceirizado  INTEGER,            -- item 7: pessoas do terceirizado digitadas nesta obra
+    producao_terceirizado TEXT,               -- ajuste 7.1: instalação "150 M2/dia" ou "2 dias" digitada
+    prazo_entrega_dias    INTEGER,            -- ajuste 7.1: dias corridos de entrega (lembrete de compra)
     PRIMARY KEY (obra_id, atividade)
 );
 
@@ -99,7 +102,8 @@ CREATE TABLE IF NOT EXISTS producao_padrao (
     atividade             TEXT PRIMARY KEY,
     producao_dia          REAL NOT NULL,
     unidade               TEXT,
-    data                  TEXT NOT NULL
+    data                  TEXT NOT NULL,
+    texto                 TEXT                -- ajuste 7.1: "150 M2/dia" ou "2 dias"
 );
 
 -- item 7: pessoas do terceirizado digitadas, padrão para as próximas obras (fica quando a obra é excluída)
@@ -124,7 +128,8 @@ CREATE TABLE IF NOT EXISTS banco_coeficientes (
 """
 
 PARAMETROS_PADRAO = {"horas_semana": 44.0, "dias_semana": 5, "rendimento": 0.9, "mudancas_jornada": [],
-                     "volume_caminhao": 8.0, "caminhoes_dia": 3.0, "juntar": None}
+                     "volume_caminhao": 8.0, "caminhoes_dia": 3.0, "juntar": None,
+                     "concreto_caminhao_m3": 3.0}
 
 
 def chave(texto: Any) -> str:
@@ -195,26 +200,31 @@ class MaoDeObraMixin:
         with closing(self._conectar()) as con:
             r = con.execute("SELECT * FROM obra_parametros WHERE obra_id = ?", (obra_id,)).fetchone()
         if r is None:
-            return dict(PARAMETROS_PADRAO)
+            return {**PARAMETROS_PADRAO, "concreto_caminhao_m3": self.padrao("concreto_caminhao_m3") or
+                    PARAMETROS_PADRAO["concreto_caminhao_m3"]}
         return {"horas_semana": r["horas_semana"], "dias_semana": r["dias_semana"], "rendimento": r["rendimento"],
                 "mudancas_jornada": json.loads(r["mudancas_jornada"] or "[]"),
                 "volume_caminhao": r["volume_caminhao"] or PARAMETROS_PADRAO["volume_caminhao"],
                 "caminhoes_dia": r["caminhoes_dia"] or PARAMETROS_PADRAO["caminhoes_dia"],
-                "juntar": json.loads(r["juntar"]) if r["juntar"] is not None else None}
+                "juntar": json.loads(r["juntar"]) if r["juntar"] is not None else None,
+                "concreto_caminhao_m3": r["concreto_caminhao_m3"] or self.padrao("concreto_caminhao_m3")
+                or PARAMETROS_PADRAO["concreto_caminhao_m3"]}
 
     def salvar_parametros(self, obra_id: int, p: dict[str, Any]) -> None:
         with closing(self._conectar()) as con, con:
             con.execute(
                 """INSERT INTO obra_parametros (obra_id, horas_semana, dias_semana, rendimento, mudancas_jornada,
-                       volume_caminhao, caminhoes_dia, juntar)
-                   VALUES (?,?,?,?,?,?,?,?)
+                       volume_caminhao, caminhoes_dia, juntar, concreto_caminhao_m3)
+                   VALUES (?,?,?,?,?,?,?,?,?)
                    ON CONFLICT (obra_id) DO UPDATE SET horas_semana = excluded.horas_semana,
                        dias_semana = excluded.dias_semana, rendimento = excluded.rendimento,
                        mudancas_jornada = excluded.mudancas_jornada, volume_caminhao = excluded.volume_caminhao,
-                       caminhoes_dia = excluded.caminhoes_dia, juntar = excluded.juntar""",
+                       caminhoes_dia = excluded.caminhoes_dia, juntar = excluded.juntar,
+                       concreto_caminhao_m3 = excluded.concreto_caminhao_m3""",
                 (obra_id, p["horas_semana"], p["dias_semana"], p["rendimento"],
                  json.dumps(p.get("mudancas_jornada") or []), p.get("volume_caminhao"), p.get("caminhoes_dia"),
-                 json.dumps(p["juntar"], ensure_ascii=False) if p.get("juntar") is not None else None),
+                 json.dumps(p["juntar"], ensure_ascii=False) if p.get("juntar") is not None else None,
+                 p.get("concreto_caminhao_m3")),
             )
 
     # ------------------------------------------------------------------ análise por serviço
@@ -229,7 +239,10 @@ class MaoDeObraMixin:
                 for tabela in ("servico_equipamento", "servico_equipe_indireta", "subcomposicoes_pendentes"):
                     con.execute(f"DELETE FROM {tabela} WHERE servico_id IN ({marcas})", ids)
             for sid, a in analises.items():
-                con.execute("UPDATE servicos SET origem_horas = ? WHERE id = ?", (a["origem"], sid))
+                concreto = ({"caminhao": a["concreto_caminhao"]} if a.get("concreto_caminhao") else
+                            {"betoneira": a["concreto_betoneira"]} if a.get("concreto_betoneira") else None)
+                con.execute("UPDATE servicos SET origem_horas = ?, concreto = ? WHERE id = ?",
+                            (a["origem"], json.dumps(concreto, ensure_ascii=False) if concreto else None, sid))
                 con.executemany(
                     "INSERT OR REPLACE INTO servico_mao_de_obra (servico_id, funcao, horas_un, origem) VALUES (?,?,?,?)",
                     [(sid, h["funcao"], h["horas_un"], h["origem"]) for h in a["horas"] if h["origem"] != "manual"],
@@ -264,10 +277,11 @@ class MaoDeObraMixin:
     def carregar_analises(self, obra_id: int) -> dict[int, dict[str, Any]]:
         """Análises gravadas (sem as estimadas). Vazio se a obra ainda não foi analisada."""
         with closing(self._conectar()) as con:
-            servicos = con.execute("SELECT id, origem_horas FROM servicos WHERE obra_id = ?", (obra_id,)).fetchall()
+            servicos = con.execute("SELECT id, origem_horas, concreto FROM servicos WHERE obra_id = ?", (obra_id,)).fetchall()
             if not any(s["origem_horas"] for s in servicos):
                 return {}
-            res = {s["id"]: {"origem": s["origem_horas"], "horas": [], "equipamentos": {}, "pendentes": [], "indireta": {}}
+            res = {s["id"]: {"origem": s["origem_horas"], "horas": [], "equipamentos": {}, "pendentes": [], "indireta": {},
+                             "concreto_caminhao": (json.loads(s["concreto"]) if s["concreto"] else {}).get("caminhao")}
                    for s in servicos}
             filtro = "servico_id IN (SELECT id FROM servicos WHERE obra_id = ?)"
             for r in con.execute(f"SELECT * FROM servico_mao_de_obra WHERE {filtro} AND origem != 'estimado'", (obra_id,)):
@@ -309,7 +323,8 @@ class MaoDeObraMixin:
             linhas = con.execute("SELECT * FROM atividade_execucao WHERE obra_id = ?", (obra_id,)).fetchall()
             maquinas = con.execute("SELECT * FROM atividade_equipamento WHERE obra_id = ?", (obra_id,)).fetchall()
         res = {l["atividade"]: {k: l[k] for k in ("execucao", "rendimento", "equipe_padrao", "duracao_manual",
-                                                   "producao_dia", "maquinas_max", "pessoas_terceirizado")} for l in linhas}
+                                                   "producao_dia", "maquinas_max", "pessoas_terceirizado",
+                                                   "producao_terceirizado", "prazo_entrega_dias")} for l in linhas}
         for m in maquinas:
             res.setdefault(m["atividade"], {}).setdefault("maquinas", {})[m["equipamento"]] = m["quantidade"]
         return res
@@ -331,7 +346,8 @@ class MaoDeObraMixin:
 
     def atualizar_execucao(self, obra_id: int, atividade: str, **campos: Any) -> None:
         validos = {k: v for k, v in campos.items() if k in ("execucao", "rendimento", "equipe_padrao", "duracao_manual",
-                                                            "producao_dia", "maquinas_max", "pessoas_terceirizado")}
+                                                            "producao_dia", "maquinas_max", "pessoas_terceirizado",
+                                                            "producao_terceirizado", "prazo_entrega_dias")}
         if not validos:
             return
         with closing(self._conectar()) as con, con:
@@ -370,10 +386,11 @@ class MaoDeObraMixin:
         with closing(self._conectar()) as con:
             return {r["atividade"]: dict(r) for r in con.execute("SELECT * FROM producao_padrao")}
 
-    def lembrar_producao(self, atividade: str, producao: float, unidade: str | None) -> None:
+    def lembrar_producao(self, atividade: str, producao: float, unidade: str | None, texto: str | None = None) -> None:
         with closing(self._conectar()) as con, con:
-            con.execute("INSERT OR REPLACE INTO producao_padrao VALUES (?,?,?,?)",
-                        (atividade, producao, unidade, datetime.now().isoformat(timespec="seconds")))
+            con.execute("INSERT OR REPLACE INTO producao_padrao (atividade, producao_dia, unidade, data, texto) "
+                        "VALUES (?,?,?,?,?)",
+                        (atividade, producao, unidade, datetime.now().isoformat(timespec="seconds"), texto))
 
     def pessoas_terceirizado_padrao(self) -> dict[str, int]:
         with closing(self._conectar()) as con:

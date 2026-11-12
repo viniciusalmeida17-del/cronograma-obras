@@ -118,16 +118,23 @@ def test_formula_com_maquinas():
 
 
 def test_maquinas_na_obra(obra_teste):
-    base = _ativ(_calc(obra_teste), "TER-01")
+    # TER-01 como própria (terceirizada tem a duração da instalação, ajuste 7.1: as máquinas não mudam nada)
+    ex0 = copy.deepcopy(obra_teste[3])
+    ex0["TER-01"]["execucao"] = "propria"
+    base = _ativ(_calc(obra_teste, ex0), "TER-01")
     assert base["calculo"]["limitante"] == "equipamento"
     caminhao = max(base["horas_equipamento"], key=base["horas_equipamento"].get)
-    ex = copy.deepcopy(obra_teste[3])
+    ex = copy.deepcopy(ex0)
     ex["TER-01"]["maquinas"] = {caminhao: 4}
     novo = _ativ(_calc(obra_teste, ex), "TER-01")
     assert novo["calculo"]["maquinas"][caminhao] == 4
     assert novo["calculo"]["dias_por_equipamento"][caminhao] == pytest.approx(
         base["calculo"]["dias_por_equipamento"][caminhao] / 4, abs=0.01)
     assert novo["duracao"]["dias"] < base["duracao"]["dias"]
+    # terceirizada: duração da instalação pela produção da biblioteca, as máquinas não mudam
+    terc = copy.deepcopy(obra_teste[3])
+    terc["TER-01"]["maquinas"] = {caminhao: 4}
+    assert _ativ(_calc(obra_teste, terc), "TER-01")["duracao"] == _ativ(_calc(obra_teste), "TER-01")["duracao"]
 
 
 @pytest.fixture()
@@ -140,6 +147,7 @@ def banco_obra(tmp_path, arquivo_teste, biblioteca):
 
 def test_maquinas_gravadas_e_validadas(banco_obra, biblioteca):
     banco, obra = banco_obra
+    etapa4.definir_execucao(banco, obra, ["TER-01"], "propria", biblioteca)   # máquinas valem na própria
     estado = etapa4.estado_mao_de_obra(banco, obra, biblioteca)
     ter = _ativ(estado, "TER-01")
     caminhao = max(ter["horas_equipamento"], key=ter["horas_equipamento"].get)

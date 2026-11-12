@@ -257,7 +257,7 @@ a pasta `arquivos_obras/` fica ao lado do banco),
 Especificação em `ITEM_6_REGRAS_DO_CRONOGRAMA.md`. As obras salvas antes continuam com a própria cópia das atividades;
 a biblioteca nova vale para as próximas importações (o banco ganha as colunas novas sozinho).
 
-- **Biblioteca** (`dados/biblioteca_atividades.xlsx`, 19 colunas no item 6 (21 com as do item 7), lidas pelo nome do cabeçalho; uma biblioteca sem as
+- **Biblioteca** (`dados/biblioteca_atividades.xlsx`, 19 colunas no item 6 (21 com as do item 7 e 23 com as do ajuste 7.1), lidas pelo nome do cabeçalho; uma biblioteca sem as
   colunas novas continua valendo):
   - 9 atividades passaram a **flexíveis** (ELE-05, ELE-06, HID-05, ESQ-02, PIN-03, EST-04, QUA-04, URB-02, ACA-01).
     Critério: rígida = segura outro serviço ou tem motivo técnico para não esperar; flexível = não libera nenhum
@@ -336,3 +336,42 @@ informativa. A única regra nova do otimizador é o limite do canteiro.
   no canteiro; nas terceirizadas com horas, a equipe escolhida pelo otimizador entra na conta. Com o máximo vazio, nada
   muda. O diagnóstico de prazo sugere "aumentar o máximo de pessoas no canteiro de X para Y reduz N dias úteis"
   quando esse limite segura o prazo (estimativa com as atividades o mais cedo possível sem passar do máximo).
+
+## Ajuste 7.1 — terceirizados com equipe e produção reais, concreto de caminhão
+
+Especificação em `ITEM_7_1_TERCEIRIZADOS_E_CONCRETO.md`.
+
+- **Terceirizado = instalação na obra.** Fabricação e entrega fora da obra não ocupam o canteiro. A terceirizada
+  tem **um modo só** (pessoas e duração fixas): o otimizador não escolhe mais a equipe nem as máquinas dela (antes
+  ele inflava, porque o custo do terceirizado é fixo). Continua podendo ser dividida em partes.
+  - **Pessoas**: digitado na obra → padrão de outras obras → `pessoas_terceirizado` da biblioteca → `equipe_padrao`
+    da atividade → sem estimativa (0, com aviso). As horas da composição não definem mais a equipe.
+  - **Duração da instalação**: digitada → produção digitada (ou padrão de outras obras) → `producao_terceirizado`
+    da biblioteca → horas da composição ÷ (pessoas × horas por dia) (ou horas de equipamento ÷ máquinas, o maior)
+    → pendência. A produção é `"150 M2/dia"` (duração = teto(soma das quantidades nessa unidade ÷ produção),
+    mínimo 1) ou `"2 dias"`; se nenhum serviço da atividade estiver na unidade, cai para a opção seguinte com aviso.
+    O mesmo formato vale no campo da tela (só o número = unidade principal da atividade).
+  - **Prazo de entrega** (`prazo_entrega_dias`, dias corridos): mostrado e editável por obra, guardado para o lembrete
+    de pedido de compra (etapa futura). Não muda o cronograma.
+  - Biblioteca: ACA-01 (granito) passa a **própria** (as pedras são compradas e o pedreiro instala); COB-03 (calhas)
+    passa a **terceirizada** ("Calhas").
+  - Tela de mão de obra, aba Própria × terceirizada: lista **"Terceirizadas para conferir"** (nome, pessoas, produção
+    ou duração, origem de cada uma e prazo de entrega), editável na própria lista; o que for digitado vira padrão das
+    próximas obras. Mudar pessoas ou produção muda a duração: a tela avisa para recalcular o cenário.
+  - Diagnóstico de prazo: terceirizada no caminho crítico gera "aumentar as pessoas do terceirizado X de A para B
+    reduz N dias" (duração na proporção, produção × B ÷ A), calculado de verdade; **Aplicar e recalcular** grava
+    pessoas e produção como digitados na obra.
+- **Concreto de caminhão** (parâmetro da etapa 4 "concreto de caminhão a partir de", padrão **3 m³** por serviço, o
+  valor fica como padrão das próximas obras): serviço com USINADO ou BOMBEADO na descrição, ou com volume de concreto
+  ≥ o parâmetro (a quantidade, se em M3; senão quantidade × coeficiente da subcomposição de concreto), não tem horas de
+  **produção do concreto**: as subcomposições de concreto (descrição começando com "CONCRETO", em m³) ficam com 0 h
+  nas origens banco, referência e estimado, e fora da estimativa por custo. Ficam lançamento, adensamento e
+  acabamento. O serviço aparece marcado "concreto de caminhão: produção do concreto sem horas". Abaixo do volume,
+  continua como betoneira. Mudar o parâmetro relê as composições.
+- **Funções que a empresa não tem**: na `funcoes.xlsx`, SERRALHEIRO, MONTADOR e SOLDADOR têm `categoria =
+  terceirizado`. Em atividade **própria**, essas horas não entram na equipe própria, na duração nem no custo (aviso
+  "N h de Serralheiro são de terceirizado e não entram na equipe própria"); essas funções saem das listas de funções
+  da empresa (parâmetros, equipe por semana).
+- Testes: `tests/test_item71.py`. A QUA-02 continua acima de 2.000 h depois da regra do concreto (estimativas por
+  custo de junta serrada, armação, polimento e lançamento): o teste da faixa 1.300–2.000 h está marcado como
+  falha esperada, com o motivo, para o engenheiro decidir.

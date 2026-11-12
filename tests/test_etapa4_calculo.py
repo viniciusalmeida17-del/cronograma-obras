@@ -1,5 +1,6 @@
 """Etapa 4 — fórmula de duração, estimativas e resumo da obra (funções puras)."""
 import copy
+import math
 
 import pytest
 
@@ -68,15 +69,20 @@ def test_est03_duracao_fixa(obra_teste):
 
 
 def test_terceirizada_sem_horas_e_pendencia_ate_duracao_manual(obra_teste):
-    res = _calc(obra_teste)
+    servicos, analises, atividades, ex0 = obra_teste
+    sem_producao = copy.deepcopy(atividades)
+    sem_producao["MET-01"]["producao_terceirizado"] = None   # sem produção na biblioteca nem horas: pendência
+    res = calcular_obra(servicos, copy.deepcopy(analises), sem_producao, ex0, {}, (12, "meses"))
     met = _ativ(res, "MET-01")
     assert met["execucao"] == "terceirizada" and met["horas_brutas"] == {} and met["duracao"] is None
     assert any(p["atividade"] == "MET-01" and p["tipo"] == "duracao" for p in res["pendencias"])
-    ex = copy.deepcopy(obra_teste[3])
+    ex = copy.deepcopy(ex0)
     ex["MET-01"]["duracao_manual"] = 40
-    res2 = _calc(obra_teste, ex)
-    assert _ativ(res2, "MET-01")["duracao"] == {"dias": 40, "unidade": "uteis", "tipo": "manual"}
+    res2 = calcular_obra(servicos, copy.deepcopy(analises), sem_producao, ex, {}, (12, "meses"))
+    assert _ativ(res2, "MET-01")["duracao"] == {"dias": 40, "unidade": "uteis", "tipo": "manual", "origem": "digitada"}
     assert not any(p["atividade"] == "MET-01" for p in res2["pendencias"])
+    # com a produção da biblioteca (ajuste 7.1) não há pendência
+    assert _ativ(_calc(obra_teste), "MET-01")["duracao"]["origem"] == "biblioteca"
 
 
 def test_execucao_sem_resposta_e_pendencia(obra_teste):
@@ -108,7 +114,7 @@ def test_estimativa_nao_vale_para_indireta_nem_terceirizada_sem_horas(obra_teste
             assert not any(h["origem"] == "estimado" for h in analises[s["id"]]["horas"]), s["item"]
 
 
-def test_terceirizar_tira_do_resumo_mas_nao_muda_duracao(obra_teste):
+def test_terceirizar_tira_do_resumo_e_duracao_vem_das_horas_por_pessoa(obra_teste):
     base = _calc(obra_teste)
     ex = copy.deepcopy(obra_teste[3])
     ex["ELE-04"]["execucao"] = "terceirizada"  # ELE-04 é "perguntar" na biblioteca
@@ -118,7 +124,12 @@ def test_terceirizar_tira_do_resumo_mas_nao_muda_duracao(obra_teste):
     ele04 = _ativ(base, "ELE-04")["horas_ajustadas"]
     for funcao, h in ele04.items():
         assert h_terc.get(funcao, 0) == pytest.approx(h_base[funcao] - h, abs=0.05)
-    assert _ativ(terc, "ELE-04")["duracao"] == _ativ(base, "ELE-04")["duracao"]
+    # ajuste 7.1: sem produção na biblioteca, a instalação dura horas da composição ÷ (pessoas × horas por dia)
+    e = _ativ(terc, "ELE-04")
+    hd = terc["parametros"]["horas_por_dia"]
+    assert e["terceirizado"]["origem"] == "equipe padrão" and e["terceirizado"]["pessoas"] == e["equipe_padrao"]
+    assert e["duracao"] == {"dias": math.ceil(round(sum(ele04.values()) / (e["equipe_padrao"] * hd), 6)),
+                            "unidade": "uteis", "tipo": "composicao", "origem": "composição"}
 
 
 def test_rendimento_e_equipe_por_atividade(obra_teste):

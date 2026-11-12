@@ -68,7 +68,12 @@ def test_resolver_todas_as_pendencias(banco, obra, biblioteca):
         etapa4.definir_atividade(banco, obra, p["atividade"], duracao_manual=10, biblioteca=biblioteca)
     estado = etapa4.estado_mao_de_obra(banco, obra, biblioteca)
     assert estado["pendencias"] == [] and estado["pode_seguir"] is True
-    assert _ativ(estado, "MET-01")["duracao"] == {"dias": 10, "unidade": "uteis", "tipo": "manual"}
+    # MET-01 (terceirizada sem horas) tem a produção da biblioteca: 1000 KG/dia (ajuste 7.1); digitada vale mais
+    met = _ativ(estado, "MET-01")["duracao"]
+    assert (met["tipo"], met["origem"], met["producao"], met["dias"]) == ("producao", "biblioteca", "1000 KG/dia", 11)
+    etapa4.definir_atividade(banco, obra, "MET-01", duracao_manual=10, biblioteca=biblioteca)
+    estado = etapa4.estado_mao_de_obra(banco, obra, biblioteca)
+    assert _ativ(estado, "MET-01")["duracao"] == {"dias": 10, "unidade": "uteis", "tipo": "manual", "origem": "digitada"}
 
 
 def test_equipe_padrao_recalcula_e_respeita_maximo(banco, obra, biblioteca):
@@ -221,7 +226,8 @@ def test_fluxo_web_etapa4(cliente, arquivo_teste):
     assert r.status_code == 200, r.get_json()
     estado = r.get_json()
     assert len(estado["atividades"]) == 74
-    assert any(p["atividade"] == "MET-01" for p in estado["pendencias"])
+    assert not any(p["atividade"] == "MET-01" for p in estado["pendencias"])   # produção da biblioteca (7.1)
+    assert _ativ(estado, "MET-01")["duracao"]["origem"] == "biblioteca"
 
     r = cliente.post(f"/api/obras/{obra}/execucao", json={"atividades": ["ELE-01", "ELE-02"], "execucao": "terceirizada"})
     assert r.status_code == 200

@@ -8,6 +8,8 @@ from typing import Any, Iterable
 from armazenamento import Banco
 from atividades.biblioteca import Biblioteca
 
+from leitor_planilha.texto import unidade_canonica
+
 from .analise import COMPOSICAO, ESTIMADO, MANUAL, Analisador, chave_codigo, mapa_codigo_item
 from .calculo import EQUIPE_MAX, EQUIPE_PADRAO, EXECUCOES, INDIRETA, PERGUNTAR, TERCEIRIZADA, calcular_obra
 from .composicoes import ler_composicoes
@@ -50,6 +52,10 @@ def atividades_da_obra(banco: Banco, obra_id: int, biblioteca: Biblioteca | None
                 a["rotulo_terceirizado"] = a["rotulo_terceirizado_biblioteca"]
             if a.get("pessoas_terceirizado") is None and lib is not None:
                 a["pessoas_terceirizado"] = lib.pessoas_terceirizado
+        if lib is not None:   # rede montada antes do ajuste 7.1
+            for campo in ("producao_terceirizado", "prazo_entrega_dias"):
+                if a.get(campo) is None:
+                    a[campo] = getattr(lib, campo)
         a["execucao_padrao"] = a.get("execucao_padrao") or "propria"
         a["equipe_padrao"] = a.get("equipe_padrao") or EQUIPE_PADRAO
         a["equipe_max"] = a.get("equipe_max") or EQUIPE_MAX
@@ -75,7 +81,7 @@ def analisar_obra(
     lidas = ler_composicoes(arquivo, dados["obra"].get("aba"))
     servicos = dados["servicos"]
     analisador = Analisador(lidas.composicoes, funcoes, palavras, mapa_codigo_item(servicos), banco.consulta_coeficientes(),
-                            carregar_referencias(funcoes))
+                            carregar_referencias(funcoes), banco.carregar_parametros(obra_id)["concreto_caminhao_m3"])
     manuais = banco.horas_manuais(obra_id)
     analises = {s["id"]: analisador.analisar_servico(s, manuais.get(s["id"])) for s in servicos}
     banco.gravar_analises(obra_id, analises)
@@ -110,7 +116,7 @@ def estado_mao_de_obra(banco: Banco, obra_id: int, biblioteca: Biblioteca | None
     if not analises:
         raise ErroMaoDeObra("A mão de obra desta obra ainda não foi calculada.")
     tabela = carregar_funcoes()
-    conhecidas = set(tabela.funcoes())
+    conhecidas = set(tabela.todas_funcoes())
     if any(h["funcao"] not in conhecidas and h["origem"] != MANUAL for a in analises.values() for h in a["horas"]) \
             and banco.arquivo_da_obra(obra_id) and not _reprocessando.get(obra_id):
         # a tabela de funções mudou (ex.: "Auxiliar de eletricista" deixou de existir): reprocessa a obra
@@ -125,9 +131,17 @@ def estado_mao_de_obra(banco: Banco, obra_id: int, biblioteca: Biblioteca | None
     if parametros.get("juntar") is None:
         parametros["juntar"] = dict(tabela.juntar_padrao)
     obra = dados["obra"]
-    producoes = aplicar_producao(banco, dados["servicos"], atividades, execucao)
+    producao_padrao = aplicar_producao(banco, dados["servicos"], atividades, execucao)
     resultado = calcular_obra(dados["servicos"], analises, atividades, execucao, parametros,
-                              (obra.get("prazo_valor"), obra.get("prazo_unidade")), banco.pessoas_terceirizado_padrao())
+                              (obra.get("prazo_valor"), obra.get("prazo_unidade")), banco.pessoas_terceirizado_padrao(),
+                              producao_padrao, tabela.funcoes_terceirizadas())
+    producoes = resumo_producao(resultado["atividades"], execucao)
+    for a in resultado["atividades"]:   # prazo de entrega (lembrete de compra; não entra no cronograma)
+        ex = execucao.get(a["codigo"]) or {}
+        lib = (atividades.get(a["codigo"]) or {}).get("prazo_entrega_dias")
+        a["prazo_entrega_dias"] = ex.get("prazo_entrega_dias") if ex.get("prazo_entrega_dias") is not None else lib
+        a["prazo_entrega_biblioteca"] = lib
+        a["producao_biblioteca"] = (atividades.get(a["codigo"]) or {}).get("producao_terceirizado")
     banco.gravar_estimativas(analises)
     banco.gravar_resumo_atividades(obra_id, resultado["atividades"])
 
@@ -161,6 +175,7 @@ def estado_mao_de_obra(banco: Banco, obra_id: int, biblioteca: Biblioteca | None
             "horas": [{**h, "horas_total": round(h["horas_un"] * (s["quantidade"] or 0), 4)} for h in a["horas"]],
             "equipamentos": a["equipamentos"], "pendentes": a["pendentes"], "indireta": a["indireta"],
             "estimativa": a.get("estimativa"),
+            "concreto_caminhao": a.get("concreto_caminhao"),
         })
     resultado["servicos"] = servicos
     resultado["obra"] = {k: obra.get(k) for k in ("id", "numero", "nome", "arquivo", "prazo_valor", "prazo_unidade",
@@ -193,25 +208,36 @@ def quantidade_principal(servicos: Iterable[dict[str, Any]], codigo: str) -> tup
 
 
 def aplicar_producao(banco: Banco, servicos: list[dict[str, Any]], atividades: dict[str, dict[str, Any]],
-                     execucao: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """Terceirizadas com produção por dia: duração = teto(quantidade ÷ produção). Usa o padrão de outras obras."""
-    import math
+                     execucao: dict[str, dict[str, Any]]) -> dict[str, str]:
+    """Produção das terceirizadas (ajuste 7.1). Converte a produção numérica antiga (unidade principal da atividade)
+    no texto "150 M2/dia" e devolve os padrões de outras obras {atividade: texto}."""
+    from atividades.biblioteca import formatar_producao
 
-    padroes = banco.producao_padrao()
+    for cod, ex in execucao.items():
+        if ex.get("producao_dia") and not ex.get("producao_terceirizado"):
+            _, un = quantidade_principal(servicos, cod)
+            if un:
+                ex["producao_terceirizado"] = formatar_producao((float(ex["producao_dia"]), unidade_canonica(un)))
+    padroes = {}
+    for cod, p in banco.producao_padrao().items():
+        if p.get("texto"):
+            padroes[cod] = p["texto"]
+        elif p.get("producao_dia") and p.get("unidade"):
+            padroes[cod] = formatar_producao((float(p["producao_dia"]), unidade_canonica(p["unidade"])))
+    return padroes
+
+
+def resumo_producao(atividades_calc: list[dict[str, Any]], execucao: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Para a tela: produção e duração de cada terceirizada, com a origem."""
     res = {}
-    for cod, a in atividades.items():
-        ex = execucao.get(cod) or {}
-        if a["tipo"] == INDIRETA or ex.get("execucao") != TERCEIRIZADA:
+    for a in atividades_calc:
+        if a["execucao"] != TERCEIRIZADA:
             continue
-        qtd, un = quantidade_principal(servicos, cod)
-        prod, origem = ex.get("producao_dia"), "obra"
-        if not prod and cod in padroes and not ex.get("duracao_manual"):
-            prod, origem = padroes[cod]["producao_dia"], "padrao"
-        res[cod] = {"quantidade": round(qtd, 4), "unidade": un, "producao_dia": prod, "origem": origem if prod else None}
-        if prod and qtd > 0:
-            dias = max(1, math.ceil(round(qtd / prod, 6)))
-            res[cod]["dias"] = dias
-            execucao.setdefault(cod, {})["duracao_manual"] = dias
+        d = a.get("duracao") or {}
+        ex = execucao.get(a["codigo"]) or {}
+        res[a["codigo"]] = {"producao": d.get("producao"), "origem": d.get("origem"), "dias": d.get("dias"),
+                            "quantidade": d.get("quantidade"), "unidade": d.get("unidade_producao"),
+                            "producao_digitada": ex.get("producao_terceirizado")}
     return res
 
 
@@ -228,7 +254,8 @@ def _json(texto: Any) -> Any:
 _RE_DATA = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
-def salvar_parametros(banco: Banco, obra_id: int, dados: dict[str, Any]) -> None:
+def salvar_parametros(banco: Banco, obra_id: int, dados: dict[str, Any]) -> bool:
+    """Grava os parâmetros. Devolve True se é preciso reler as composições (concreto de caminhão mudou)."""
     atual = banco.carregar_parametros(obra_id)
     p = {**atual, **{k: v for k, v in dados.items() if k in atual and k != "juntar"}}
     try:
@@ -265,6 +292,15 @@ def salvar_parametros(banco: Banco, obra_id: int, dados: dict[str, Any]) -> None
             raise ErroMaoDeObra(f"{nome} inválido.")
         if not 0 < p[campo] <= 100:
             raise ErroMaoDeObra(f"{nome} deve ser maior que zero.")
+    if "concreto_caminhao_m3" in dados:
+        try:
+            v = float(str(dados["concreto_caminhao_m3"]).replace(",", "."))
+        except (TypeError, ValueError):
+            raise ErroMaoDeObra("Concreto de caminhão a partir de: digite os m³ por serviço.")
+        if not 0 < v <= 100000:
+            raise ErroMaoDeObra("Concreto de caminhão a partir de: valor maior que zero (m³ por serviço).")
+        p["concreto_caminhao_m3"] = v
+        banco.lembrar_padrao("concreto_caminhao_m3", v)
     if "juntar" in dados:
         possivel = carregar_funcoes().juntar_possivel
         juntar = {}
@@ -276,6 +312,7 @@ def salvar_parametros(banco: Banco, obra_id: int, dados: dict[str, Any]) -> None
             juntar[f] = destino
         p["juntar"] = juntar
     banco.salvar_parametros(obra_id, p)
+    return abs((p.get("concreto_caminhao_m3") or 0) - (atual.get("concreto_caminhao_m3") or 0)) > 1e-9
 
 
 def definir_execucao(banco: Banco, obra_id: int, codigos: Iterable[str], execucao: str,
@@ -328,6 +365,7 @@ def definir_atividade(banco: Banco, obra_id: int, codigo: str, rendimento: Any =
                 raise ErroMaoDeObra("A duração deve ser um número inteiro de dias úteis, maior que zero.")
             campos["duracao_manual"] = int(d)
             campos["producao_dia"] = None
+            campos["producao_terceirizado"] = None
     quantidades: dict[str, int] = {}
     for equip, n in (maquinas or {}).items():
         try:
@@ -338,22 +376,35 @@ def definir_atividade(banco: Banco, obra_id: int, codigo: str, rendimento: Any =
             raise ErroMaoDeObra(f"Quantidade de máquinas de {equip} deve ser um número inteiro entre 1 e {MAQUINAS_MAX}.")
         quantidades[str(equip)] = int(v)
     if producao_dia is not _NADA:
-        if producao_dia in (None, ""):
-            campos["producao_dia"] = None
-        else:
-            try:
-                prod = float(str(producao_dia).replace(",", "."))
-            except ValueError:
-                raise ErroMaoDeObra("Produção por dia inválida.")
-            if prod <= 0:
-                raise ErroMaoDeObra("A produção por dia deve ser maior que zero.")
-            campos["producao_dia"] = prod
-            campos["duracao_manual"] = None
-            _, un = quantidade_principal(_obra(banco, obra_id)["servicos"], codigo)
-            banco.lembrar_producao(codigo, prod, un)
+        campos.update(_campos_producao(banco, obra_id, codigo, producao_dia))
     banco.atualizar_execucao(obra_id, codigo, **campos)
     if quantidades:
         banco.gravar_maquinas(obra_id, codigo, quantidades)
+
+
+def _campos_producao(banco: Banco, obra_id: int, codigo: str, producao: Any) -> dict[str, Any]:
+    """Produção da terceirizada digitada: "150 M2/dia", "2 dias" ou só o número (na unidade principal da
+    atividade). Vira o padrão das próximas obras. Vazio volta ao padrão."""
+    from atividades.biblioteca import formatar_producao, interpretar_producao
+
+    if producao in (None, ""):
+        return {"producao_dia": None, "producao_terceirizado": None}
+    texto = str(producao).strip()
+    try:
+        float(texto.replace(",", "."))
+        _, un = quantidade_principal(_obra(banco, obra_id)["servicos"], codigo)
+        if not un:
+            raise ErroMaoDeObra(f"{codigo}: a atividade não tem quantidade; digite a produção com a unidade (ex.: 150 M2/dia).")
+        texto = f"{texto} {unidade_canonica(un)}/dia"
+    except ValueError:
+        pass
+    try:
+        prod = interpretar_producao(texto)
+    except ValueError as e:
+        raise ErroMaoDeObra(f"{codigo}: {e}.")
+    texto = formatar_producao(prod)
+    banco.lembrar_producao(codigo, prod[0], prod[1] or "DIAS", texto)
+    return {"producao_terceirizado": texto, "producao_dia": None, "duracao_manual": None}
 
 
 def definir_trocas(banco: Banco, obra_id: int, codigo: str, texto: Any, salvar_biblioteca: bool = False,
@@ -385,7 +436,8 @@ def definir_trocas(banco: Banco, obra_id: int, codigo: str, texto: Any, salvar_b
 
 def definir_terceirizado(banco: Banco, obra_id: int, codigo: str, rotulo: Any = _NADA, pessoas: Any = _NADA,
                          salvar_biblioteca: bool = False, caminho_biblioteca: Any = None,
-                         biblioteca: Biblioteca | None = None) -> dict[str, Any]:
+                         biblioteca: Biblioteca | None = None, producao: Any = _NADA,
+                         prazo_entrega: Any = _NADA, duracao: Any = _NADA) -> dict[str, Any]:
     """Nome e pessoas do terceirizado (item 7) nesta obra. Vazio volta ao padrão.
 
     O nome pode ser gravado também na coluna rotulo_terceirizado da biblioteca (com cópia de segurança).
@@ -420,6 +472,30 @@ def definir_terceirizado(banco: Banco, obra_id: int, codigo: str, rotulo: Any = 
                 raise ErroMaoDeObra("Pessoas do terceirizado: número inteiro entre 1 e 500.")
             banco.atualizar_execucao(obra_id, codigo, pessoas_terceirizado=int(v))
             banco.lembrar_pessoas_terceirizado(codigo, int(v))
+    if producao is not _NADA:
+        banco.atualizar_execucao(obra_id, codigo, **_campos_producao(banco, obra_id, codigo, producao))
+    if duracao is not _NADA:
+        if duracao in (None, ""):
+            banco.atualizar_execucao(obra_id, codigo, duracao_manual=None)
+        else:
+            try:
+                d = float(str(duracao).replace(",", "."))
+            except ValueError:
+                raise ErroMaoDeObra("A duração deve ser um número inteiro de dias úteis.")
+            if d <= 0 or d != int(d):
+                raise ErroMaoDeObra("A duração deve ser um número inteiro de dias úteis, maior que zero.")
+            banco.atualizar_execucao(obra_id, codigo, duracao_manual=int(d), producao_terceirizado=None, producao_dia=None)
+    if prazo_entrega is not _NADA:
+        if prazo_entrega in (None, ""):
+            banco.atualizar_execucao(obra_id, codigo, prazo_entrega_dias=None)
+        else:
+            try:
+                v = float(str(prazo_entrega).replace(",", "."))
+            except ValueError:
+                raise ErroMaoDeObra("Prazo de entrega: número inteiro de dias corridos.")
+            if v != int(v) or not 0 <= v <= 1000:
+                raise ErroMaoDeObra("Prazo de entrega: número inteiro de dias corridos, entre 0 e 1000.")
+            banco.atualizar_execucao(obra_id, codigo, prazo_entrega_dias=int(v))
     estado = estado_mao_de_obra(banco, obra_id, biblioteca)
     estado["backup_biblioteca"] = str(backup) if backup else None
     return estado

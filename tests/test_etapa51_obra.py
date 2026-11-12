@@ -165,13 +165,15 @@ def test_producao_por_dia_de_terceirizada(tmp_path, arquivo_teste, biblioteca):
     etapa4.definir_atividade(banco, obra, "QUA-03", producao_dia=150, biblioteca=biblioteca)
     est = etapa4.estado_mao_de_obra(banco, obra, biblioteca)
     q = _ativ(est, "QUA-03")
-    assert q["duracao"] == {"dias": math.ceil(qtd / 150), "unidade": "uteis", "tipo": "manual"}
-    assert est["producao"]["QUA-03"]["producao_dia"] == 150
+    # ajuste 7.1: o número vira "150 M2/dia" (unidade principal) e vale mais que a produção da biblioteca (60 M2/dia)
+    assert (q["duracao"]["dias"], q["duracao"]["tipo"], q["duracao"]["origem"]) == (
+        math.ceil(qtd / 150), "producao", "produção digitada")
+    assert est["producao"]["QUA-03"]["producao_digitada"] == "150 M2/dia"
     # vira o padrão da próxima obra
     outra = preparar_obra(banco, arquivo_teste, biblioteca)
     etapa4.analisar_obra(banco, outra, biblioteca)
     est2 = etapa4.estado_mao_de_obra(banco, outra, biblioteca)
-    assert est2["producao"]["QUA-03"]["origem"] == "padrao"
+    assert est2["producao"]["QUA-03"]["origem"] == "outras obras"
     assert _ativ(est2, "QUA-03")["duracao"]["dias"] == math.ceil(qtd / 150)
 
 

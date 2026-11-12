@@ -104,6 +104,9 @@ class Atividade:
     # item 7 (colunas opcionais): terceirizado na contagem de pessoas
     rotulo_terceirizado: str | None = None     # "Telhado" → "Telhado (terceirizado)"; vazio = função principal
     pessoas_terceirizado: int | None = None    # estimativa de pessoas quando não há horas na composição
+    # ajuste 7.1 (colunas opcionais)
+    producao_terceirizado: str | None = None   # instalação: "150 M2/dia" ou "2 dias"
+    prazo_entrega_dias: int | None = None      # dias corridos de fabricação/entrega (lembrete de compra, futuro)
 
     def dependencias(self, prazos: str = PRATICA) -> list[Dependencia]:
         """depende_de da opção de prazos de espera (norma só onde a coluna depende_de_norma estiver preenchida)."""
@@ -126,6 +129,7 @@ class Atividade:
             "trocar_funcoes": formatar_trocas(self.trocar_funcoes), "fonte": self.fonte,
             "depende_de_norma": formatar_dependencias(self.depende_de_norma) if self.depende_de_norma is not None else None,
             "rotulo_terceirizado": self.rotulo_terceirizado, "pessoas_terceirizado": self.pessoas_terceirizado,
+            "producao_terceirizado": self.producao_terceirizado, "prazo_entrega_dias": self.prazo_entrega_dias,
         }
 
 
@@ -239,6 +243,31 @@ def interpretar_trocas(texto: Any, funcoes: Iterable[str] | None = None) -> tupl
 
 def formatar_trocas(trocas: Iterable[tuple[str, str]] | None) -> str:
     return "; ".join(f"{o} > {d}" for o, d in (trocas or []))
+
+
+_RE_PRODUCAO = re.compile(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:([^\s/]+)\s*/\s*dia|dias?)\s*$", re.I)
+
+
+def interpretar_producao(texto: Any) -> tuple[float, str | None] | None:
+    """'150 M2/dia' -> (150.0, 'M2'); '2 dias' -> (2.0, None); vazio -> None. Formato inválido: ValueError."""
+    if texto is None or not str(texto).strip():
+        return None
+    m = _RE_PRODUCAO.match(str(texto))
+    if not m:
+        raise ValueError(f"produção '{texto}' inválida (use \"150 M2/dia\" ou \"2 dias\")")
+    valor = float(m.group(1).replace(",", "."))
+    if valor <= 0:
+        raise ValueError(f"produção '{texto}' deve ser maior que zero")
+    return valor, (normalizar(m.group(2)).replace(" ", "") if m.group(2) else None)
+
+
+def formatar_producao(prod: tuple[float, str | None] | None) -> str:
+    if not prod:
+        return ""
+    v = f"{prod[0]:g}".replace(".", ",")
+    if prod[1]:
+        return f"{v} {prod[1]}/dia"
+    return f"{v} dia" if prod[0] == 1 else f"{v} dias"
 
 
 def _funcoes_da_empresa() -> list[str] | None:
@@ -386,6 +415,21 @@ def _ler_atividades(ws, erros, funcoes: list[str] | None = None) -> dict[str, At
                 pessoas_terc = int(v) or None
             except ValueError:
                 erros.append({"aba": ABA_ATIVIDADES, "linha": n, "mensagem": f"{codigo}: pessoas_terceirizado '{bruto}' inválido (número inteiro ≥ 0)."})
+        producao_terc = None
+        try:
+            producao_terc = formatar_producao(interpretar_producao(opcional("producao_terceirizado"))) or None
+        except ValueError as e:
+            erros.append({"aba": ABA_ATIVIDADES, "linha": n, "mensagem": f"{codigo}: producao_terceirizado: {e}."})
+        prazo_entrega = None
+        bruto = opcional("prazo_entrega_dias")
+        if bruto is not None and str(bruto).strip():
+            try:
+                v = float(str(bruto).replace(",", "."))
+                if v != int(v) or v < 0:
+                    raise ValueError
+                prazo_entrega = int(v)
+            except ValueError:
+                erros.append({"aba": ABA_ATIVIDADES, "linha": n, "mensagem": f"{codigo}: prazo_entrega_dias '{bruto}' inválido (número inteiro de dias corridos)."})
         tipo_producao = (_texto(opcional("tipo_producao")) or "").lower() or None
         if tipo_producao and tipo_producao not in TIPOS_PRODUCAO:
             erros.append({"aba": ABA_ATIVIDADES, "linha": n, "mensagem": f"{codigo}: tipo_producao '{tipo_producao}' inválido (use {', '.join(TIPOS_PRODUCAO)} ou deixe vazio)."})
@@ -402,6 +446,7 @@ def _ler_atividades(ws, erros, funcoes: list[str] | None = None) -> dict[str, At
             execucao_padrao=execucao, tipo_producao=tipo_producao, **numeros,
             trocar_funcoes=trocas, fonte=_texto(opcional("fonte")), depende_de_norma=deps_norma,
             rotulo_terceirizado=_texto(opcional("rotulo_terceirizado")), pessoas_terceirizado=pessoas_terc,
+            producao_terceirizado=producao_terc, prazo_entrega_dias=prazo_entrega,
         )
     return atividades
 

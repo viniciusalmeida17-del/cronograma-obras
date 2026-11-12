@@ -69,6 +69,7 @@ function desenhar() {
   mostrarAba(est.aba);
   desenharParametros();
   desenharExecucao();
+  desenharConferir();
   desenharAtividades();
   desenharResumo();
 }
@@ -90,6 +91,7 @@ function desenharParametros() {
   f.rendimento.value = Math.round(p.rendimento * 1000) / 10;
   f.volume_caminhao.value = p.volume_caminhao;
   f.caminhoes_dia.value = p.caminhoes_dia;
+  f.concreto_caminhao_m3.value = p.concreto_caminhao_m3 ?? 3;
   const j = est.d.juntar || { possivel: {}, obra: {} };
   $("#lista-juntar").innerHTML = Object.entries(j.possivel).map(([fn, destino]) => `<label class="inline">
       <input type="checkbox" name="juntar" data-funcao="${esc(fn)}" data-destino="${esc(destino)}" ${j.obra && j.obra[fn] ? "checked" : ""}>
@@ -118,6 +120,7 @@ $("#form-parametros").addEventListener("submit", (e) => {
     horas_semana: f.horas_semana.value, dias_semana: f.dias_semana.value,
     rendimento: Number(f.rendimento.value) / 100, mudancas_jornada: mudancas,
     volume_caminhao: f.volume_caminhao.value, caminhoes_dia: f.caminhoes_dia.value,
+    concreto_caminhao_m3: f.concreto_caminhao_m3.value,
     juntar: Object.fromEntries($$("[name=juntar]", f).filter((i) => i.checked).map((i) => [i.dataset.funcao, i.dataset.destino])),
   } }, $("#msg-parametros"), "Parâmetros salvos; durações recalculadas.");
 });
@@ -147,6 +150,47 @@ function desenharExecucao() {
     </div>`;
   }).join("");
 }
+const ORIGEM_DURACAO = { "digitada": "digitada", "produção digitada": "produção digitada", "outras obras": "outras obras",
+  "biblioteca": "biblioteca", "composição": "horas ÷ pessoas", "fixa da biblioteca": "fixa da biblioteca" };
+
+function desenharConferir() {
+  const lista = est.d.atividades.filter((a) => a.execucao === "terceirizada" && a.terceirizado);
+  const prod = est.d.producao || {};
+  $("#conferir-terceirizadas").innerHTML = `<thead><tr><th>Atividade</th><th>Nome</th><th class="num">Pessoas</th>
+      <th>Produção ou duração da instalação</th><th class="num">Duração (dias úteis)</th><th class="num">Entrega (dias corridos)</th><th></th></tr></thead><tbody>
+    ${lista.map((a) => {
+      const t = a.terceirizado;
+      const p = prod[a.codigo] || {};
+      const d = a.duracao || {};
+      return `<tr data-codigo="${a.codigo}"><td><b>${a.codigo}</b> ${esc(a.nome)}</td>
+        <td><input name="rotulo" value="${esc(a.rotulo_terceirizado || "")}" placeholder="${esc(t.rotulo)}" maxlength="60" size="14"></td>
+        <td class="num"><input type="number" name="pessoas" min="1" max="500" step="1" value="${t.digitado ?? ""}" placeholder="${t.pessoas || "—"}" style="width:5em">
+          <br><small class="discreto">${esc(t.origem)}</small>${t.aviso ? `<br><span class="falta">${esc(t.aviso)}</span>` : ""}</td>
+        <td><input name="producao" value="${esc(p.producao_digitada || "")}" placeholder="${esc(p.producao || a.producao_biblioteca || "ex.: 150 M2/dia ou 2 dias")}" size="14">
+          <br><small class="discreto">${p.quantidade ? `${fmtH4.format(p.quantidade)} ${esc(p.unidade || "")} · ` : ""}${esc(ORIGEM_DURACAO[d.origem] || d.origem || "falta")}</small></td>
+        <td class="num"><input type="number" name="duracao" min="1" step="1" value="${a.duracao_manual ?? ""}" placeholder="${d.dias ?? "—"}" style="width:5em"></td>
+        <td class="num"><input type="number" name="entrega" min="0" step="1" value="${a.prazo_entrega_dias ?? ""}" placeholder="—" style="width:5em">
+          ${a.prazo_entrega_biblioteca != null ? `<br><small class="discreto">biblioteca: ${a.prazo_entrega_biblioteca}</small>` : ""}</td>
+        <td><button type="button" class="secundario pequeno" data-salvar-terc="${a.codigo}">Salvar</button></td></tr>`;
+    }).join("") || `<tr><td colspan="7" class="discreto">Nenhuma atividade terceirizada.</td></tr>`}</tbody>`;
+}
+$("#conferir-terceirizadas").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-salvar-terc]");
+  if (!b) return;
+  const tr = b.closest("tr");
+  const v = (n) => $(`[name=${n}]`, tr).value;
+  const a = est.d.atividades.find((x) => x.codigo === b.dataset.salvarTerc);
+  const corpo = { rotulo_terceirizado: v("rotulo"), pessoas_terceirizado: v("pessoas"), prazo_entrega_dias: v("entrega") };
+  const prodAtual = ((est.d.producao || {})[a.codigo] || {}).producao_digitada || "";
+  if (v("producao") !== prodAtual) corpo.producao_terceirizado = v("producao");
+  if (v("duracao") !== String(a.duracao_manual ?? "")) corpo.duracao_manual = v("duracao");
+  chamar(`/api/obras/${obraId}/atividade/${a.codigo}/terceirizado`, { json: corpo }, $("#msg-conferir"), "").then((ok) => {
+    if (!ok) return;
+    const ct = est.d.contagem || {};
+    mensagem($("#msg-conferir"), `${a.codigo}: terceirizado salvo.` + (ct.precisa_recalcular ? " Pessoas e duração mudam o cronograma: recalcule o cenário." : ""), "ok");
+  });
+});
+
 $("#lista-execucao").addEventListener("click", (e) => {
   const b = e.target.closest("[data-exec]");
   if (!b) return;
@@ -182,7 +226,7 @@ function desenharAtividades() {
     const bruto = soma(a.horas_brutas), ajust = soma(a.horas_ajustadas), eq = soma(a.horas_equipamento);
     const pend = !a.duracao || !a.execucao;
     return `<tr class="linha-ativ ${aberta ? "aberta" : ""} ${pend ? "pendente-linha" : ""}" data-codigo="${a.codigo}">
-      <td><span class="seta">${aberta ? "▾" : "▸"}</span> <b>${a.codigo}</b> ${esc(a.nome)}<span class="linha-excel">${a.n_itens} ${a.n_itens === 1 ? "item" : "itens"} · ${esc(a.etapa)}${a.trocas_aplicadas?.length ? ` · <span class="troca" title="${esc(a.trocas_aplicadas.map(textoTroca).join("\n"))}">função trocada</span>` : ""}${a.terceirizado ? ` · <span class="${a.terceirizado.origem === "sem estimativa" ? "falta" : "troca"}" title="${esc(a.terceirizado.aviso || `origem: ${a.terceirizado.origem}`)}">${esc(a.terceirizado.nome)}: ${a.terceirizado.pessoas || "?"}</span>` : ""}</span></td>
+      <td><span class="seta">${aberta ? "▾" : "▸"}</span> <b>${a.codigo}</b> ${esc(a.nome)}<span class="linha-excel">${a.n_itens} ${a.n_itens === 1 ? "item" : "itens"} · ${esc(a.etapa)}${a.trocas_aplicadas?.length ? ` · <span class="troca" title="${esc(a.trocas_aplicadas.map(textoTroca).join("\n"))}">função trocada</span>` : ""}${a.avisos_terceirizado?.length ? ` · <span class="falta" title="${esc(a.avisos_terceirizado.join("\n"))}">horas de terceirizado fora</span>` : ""}${a.terceirizado ? ` · <span class="${a.terceirizado.origem === "sem estimativa" ? "falta" : "troca"}" title="${esc(a.terceirizado.aviso || `origem: ${a.terceirizado.origem}`)}">${esc(a.terceirizado.nome)}: ${a.terceirizado.pessoas || "?"}</span>` : ""}</span></td>
       <td>${a.execucao ? `<span class="selo-exec ${a.execucao}">${a.execucao === "propria" ? "própria" : "terceirizada"}</span>` : '<span class="falta">escolher</span>'}</td>
       <td>${esc(a.funcao_principal || "—")}</td>
       <td class="num" title="${Object.entries(a.horas_ajustadas).map(([f, h]) => `${f}: ${horas(h)} h`).join("\n")}">${horas(bruto)} → <b>${horas(ajust)}</b></td>
@@ -215,15 +259,15 @@ function formTrocas(a) {
     </form>`;
 }
 
-const ORIGEM_PESSOAS = { "digitado": "digitado", "composição": "composição", "outras obras": "outras obras",
-  "biblioteca": "biblioteca", "sem estimativa": "sem estimativa" };
+const ORIGEM_PESSOAS = { "digitado": "digitado", "outras obras": "outras obras", "biblioteca": "biblioteca",
+  "equipe padrão": "equipe padrão", "sem estimativa": "sem estimativa" };
 
 function formTerceirizado(a) {
   const t = a.terceirizado;
   if (!t) return "";
   const mudou = (a.rotulo_terceirizado || "") !== (a.rotulo_terceirizado_biblioteca || "");
-  const detalhe = Object.keys(t.detalhe || {}).length
-    ? ` (${Object.entries(t.detalhe).map(([f, n]) => `${n} ${esc(f.toLowerCase())}`).join(" + ")}${t.por_modo ? "; no cronograma vale a equipe escolhida pelo otimizador" : ""})` : "";
+  const hc = Object.entries(t.horas_composicao || {});
+  const detalhe = hc.length ? `<br>Horas da composição (só último recurso para a duração): ${hc.map(([f, h]) => `${esc(f)} ${horas(h)} h`).join(" · ")}` : "";
   return `<form class="form-terceirizado" data-codigo="${a.codigo}">
       <label>Nome do terceirizado <small>(atividades com o mesmo nome somam na semana)</small>
         <input name="rotulo_terceirizado" value="${esc(a.rotulo_terceirizado || "")}" maxlength="60" placeholder="${esc(t.rotulo)}"></label>
@@ -232,7 +276,9 @@ function formTerceirizado(a) {
         <small>origem: <b>${ORIGEM_PESSOAS[t.origem] || esc(t.origem)}</b></small></label>
       <label class="inline"><input type="checkbox" name="salvar_biblioteca"> salvar o nome também na biblioteca padrão</label>
       <button type="submit" class="secundario">Salvar terceirizado</button>
-      <p class="discreto">Na contagem de pessoas: <b>${esc(t.nome)}: ${t.pessoas} pessoa(s)</b> · ${ORIGEM_PESSOAS[t.origem] || esc(t.origem)}${detalhe}
+      <p class="discreto">Na contagem de pessoas: <b>${esc(t.nome)}: ${t.pessoas} pessoa(s)</b> · ${ORIGEM_PESSOAS[t.origem] || esc(t.origem)}
+        · instalação: <b>${a.duracao ? `${a.duracao.dias} dias` : "—"}</b> (${esc((a.duracao || {}).origem || "falta")}${(a.duracao || {}).producao ? `: ${esc(a.duracao.producao)}` : ""})
+        ${a.prazo_entrega_dias != null ? `· entrega: ${a.prazo_entrega_dias} dias corridos (lembrete de compra, etapa futura)` : ""}${detalhe}
         ${t.aviso ? `<br><span class="falta">${esc(t.aviso)}</span>` : ""}
         ${mudou ? `<br><b>nome mudado nesta obra</b> (biblioteca: ${esc(a.rotulo_terceirizado_biblioteca || "vazio")})` : ""}
         <br>Não muda custo nem ociosidade: o terceirizado é contrato fechado; a contagem é informativa.</p>
@@ -260,13 +306,14 @@ function detalheAtividade(a, servs) {
         <input type="number" name="duracao_manual" min="1" step="1" value="${a.duracao_manual ?? ""}" placeholder="${a.duracao && a.duracao.tipo !== "manual" ? a.duracao.dias : "obrigatória"}"></label>
       ${a.execucao === "terceirizada" ? (() => {
         const pr = (est.d.producao || {})[a.codigo] || {};
-        return `<label>ou produção por dia (${esc(pr.unidade || "un")}/dia)
-          <input type="number" name="producao_dia" min="0.01" step="any" value="${pr.producao_dia ?? ""}" placeholder="ex.: 150">
-          <small>${pr.quantidade ? `${fmtH4.format(pr.quantidade)} ${esc(pr.unidade || "")}` : ""}${pr.dias ? ` → ${pr.dias} dias úteis` : ""}${pr.origem === "padrao" ? " (padrão de outra obra)" : ""}</small></label>`;
+        return `<label>ou produção da instalação
+          <input name="producao_dia" value="${esc(pr.producao_digitada || "")}" placeholder="${esc(pr.producao || "ex.: 150 M2/dia ou 2 dias")}">
+          <small>${pr.quantidade ? `${fmtH4.format(pr.quantidade)} ${esc(pr.unidade || "")}` : ""}${pr.dias ? ` → ${pr.dias} dias úteis` : ""}${pr.origem ? ` (${esc(pr.origem)})` : ""}</small></label>`;
       })() : ""}
       <button type="submit" class="primario">Aplicar</button>
       <p class="mensagem msg-ativ"></p>
     </form>
+    ${(a.avisos_terceirizado || []).map((t) => `<p class="aviso-sem-estimativa">${esc(t)}.</p>`).join("")}
     ${a.execucao === "terceirizada" ? formTerceirizado(a) : formTrocas(a)}
     <p class="discreto">Equipe padrão: ${equipe}${maquinas ? `<br>Equipamentos: ${maquinas}` : ""}${c ? `<br>Duração exata ${fmtH.format(c.dias_exatos)} dias (limitada por ${{ equipamento: "equipamento", concretagem: `concretagem: ${fmtH.format(a.volume_m3 || 0)} m³` }[c.limitante] || "mão de obra"})` : ""}${a.duracao_fixa_dias ? `<br>Duração fixa da biblioteca: ${a.duracao_fixa_dias} dias corridos` : ""}</p>
     <table class="servicos"><thead><tr><th>Item</th><th class="desc">Serviço</th><th class="num">Quant.</th><th>Origem</th><th>Horas por função (h/un → total)</th><th></th></tr></thead><tbody>
@@ -290,7 +337,7 @@ function linhaServico(s) {
     </tbody></table></details>` : "";
   return `<tr class="${s.origem === "estimado" ? "linha-estimada" : ""}">
     <td class="nowrap">${esc(s.item)}<span class="linha-excel">linha ${s.linha_excel}</span></td>
-    <td class="desc">${esc(s.descricao)}<span class="linha-excel">${esc(s.base || "")} ${esc(s.codigo || "")}</span>${pend}</td>
+    <td class="desc">${esc(s.descricao)}<span class="linha-excel">${esc(s.base || "")} ${esc(s.codigo || "")}</span>${s.concreto_caminhao ? `<span class="concreto-caminhao" title="${esc(`${s.concreto_caminhao.motivo}; ${horas(s.concreto_caminhao.horas_retiradas)} h de produção de concreto retiradas`)}">concreto de caminhão: produção do concreto sem horas</span>` : ""}${pend}</td>
     <td class="num">${fmtH4.format(s.quantidade || 0)} ${esc(s.unidade)}</td>
     <td><span class="selo-origem ${s.origem}">${ORIGENS[s.origem]?.rotulo}</span>${s.estimativa ? `<small class="discreto"><br>razão da ${s.estimativa.nivel}</small>` : ""}${s.estimativa?.limitada ? `<br><span class="limitada" title="Sem o limite: ${horas(s.estimativa.horas_sem_limite)} h">estimativa limitada, revisar</span>` : ""}</td>
     <td class="horas-servico">${htmlHoras}</td>
@@ -350,7 +397,7 @@ $("#tabela-atividades").addEventListener("submit", (e) => {
   const maquinas = {};
   $$("[name=maquina]", f).forEach((i) => { maquinas[i.dataset.equip] = i.value; });
   const extra = {};
-  if (f.producao_dia && f.producao_dia.value !== String(((est.d.producao || {})[f.dataset.codigo] || {}).producao_dia ?? "")) {
+  if (f.producao_dia && f.producao_dia.value !== String(((est.d.producao || {})[f.dataset.codigo] || {}).producao_digitada ?? "")) {
     extra.producao_dia = f.producao_dia.value;
   }
   chamar(`/api/obras/${obraId}/atividade/${f.dataset.codigo}`, { json: {

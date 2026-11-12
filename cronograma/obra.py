@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import math
 import re
 import threading
 from collections import defaultdict
@@ -508,6 +509,19 @@ def definir_limites(banco: Banco, obra_id: int, codigo: str, equipe_max: Any = N
         banco.atualizar_execucao(obra_id, codigo, maquinas_max=_inteiro(maquinas_max, "o máximo de máquinas", 1, 50, True))
 
 
+def _producao_escalada(texto: str | None, a: int, b: int, nova_duracao: int) -> str:
+    """Produção × B ÷ A ("150 M2/dia" com 4 → 6 pessoas = "225 M2/dia"); sem produção por unidade, "N dias"."""
+    from atividades.biblioteca import formatar_producao, interpretar_producao
+
+    try:
+        prod = interpretar_producao(texto)
+    except ValueError:
+        prod = None
+    if prod and prod[1]:
+        return formatar_producao((round(prod[0] * b / a, 2), prod[1]))
+    return formatar_producao((float(nova_duracao), None))
+
+
 def aplicar_sugestao(banco: Banco, obra_id: int, acao: dict[str, Any], biblioteca: Biblioteca | None = None) -> None:
     """Aplica uma sugestão do diagnóstico de prazo."""
     tipo, cod, valor = acao.get("tipo"), acao.get("atividade"), acao.get("valor")
@@ -517,6 +531,12 @@ def aplicar_sugestao(banco: Banco, obra_id: int, acao: dict[str, Any], bibliotec
         definir_limites(banco, obra_id, cod, maquinas_max=valor, biblioteca=biblioteca)
     elif tipo == "destravar":
         banco.travar_equipe(obra_id, cod, None)
+    elif tipo == "pessoas_terceirizado":
+        try:
+            etapa4.definir_terceirizado(banco, obra_id, cod, pessoas=acao.get("pessoas"), producao=acao.get("producao"),
+                                        biblioteca=biblioteca)
+        except etapa4.ErroMaoDeObra as exc:
+            raise ErroCronograma(str(exc))
     elif tipo == "max_pessoas_total":
         salvar_parametros_cronograma(banco, obra_id, {"max_pessoas_total": valor})
     elif tipo == "duracao":
@@ -687,6 +707,20 @@ def diagnostico(inst: Instancia, ctx: dict[str, Any]) -> dict[str, Any]:
                                            f"reduz {ganho} dias úteis",
                                   "ganho": ganho, "acao": {"tipo": "maquinas_max", "atividade": cod, "valor": novo}})
         m0 = t.modos[0]
+        info = t.terceirizado or {}
+        if t.execucao == TERCEIRIZADA and m0.dias_uteis and info.get("pessoas") and item["duracao"] > 1:
+            # ajuste 7.1: mais pessoas do terceirizado, duração reduzida na proporção (produção × B ÷ A)
+            a_, b_ = int(info["pessoas"]), max(int(info["pessoas"]) + 1, math.ceil(info["pessoas"] * 1.5))
+            nova = max(1, math.ceil(item["duracao"] * a_ / b_ - 1e-9))
+            ganho = testar(cod, [Modo(dias_uteis=nova)])
+            if ganho > 0:
+                producao = _producao_escalada(info.get("producao"), a_, b_, nova)
+                sugestoes.append({"texto": f"aumentar as pessoas do terceirizado {info.get('nome') or nome} ({cod}) de "
+                                           f"{a_} para {b_} reduz {ganho} dias úteis (instalação de {item['duracao']} "
+                                           f"para {nova} dias, produção {producao})",
+                                  "ganho": ganho, "acao": {"tipo": "pessoas_terceirizado", "atividade": cod,
+                                                           "pessoas": b_, "producao": producao}})
+            continue
         if len(t.modos) == 1 and m0.dias_uteis and not m0.horas and item["duracao"] > 2:
             nova = max(1, int(item["duracao"] * 0.75))
             ganho = testar(cod, modos_da_atividade(a4, t.travada, jornadas, t.maquinas_max, dias_uteis=nova))
@@ -724,6 +758,7 @@ def diagnostico(inst: Instancia, ctx: dict[str, Any]) -> dict[str, Any]:
 
 # --------------------------------------------------------------------------- continuidade: procurar melhorias
 
+EQUIPE_PADRAO_TERC = 2   # pessoas da principal ao testar "terceirizar"
 TEMPO_MELHORIAS = 20      # segundos por alternativa testada
 FUNCOES_MELHORIAS = 3     # as funções com maior custo de horas paradas
 
@@ -821,8 +856,12 @@ def instancia_com(inst: Instancia, c: dict[str, Any], juntar: dict[str, str] | N
         extra = sum(h * inst.custo_hora.get(f, 0.0) for f, h in horas.items())
         t.execucao = TERCEIRIZADA
         t.travada = None
-        t.terceirizado = {"rotulo": t.funcao_principal or t.nome or cod, "pessoas": sum(m0.equipe.values()),
-                          "origem": "composição", "por_modo": True, "detalhe": dict(m0.equipe)}
+        # um modo só (ajuste 7.1): a equipe padrão da atividade, com a duração dela
+        k = inst.modo_padrao(cod, EQUIPE_PADRAO_TERC)
+        mk = inst.tarefas[cod].modos[k]
+        t.modos = [Modo(dias_uteis=inst.duracao(cod, k, 0))] if not mk.corridos else [mk]
+        t.terceirizado = {"rotulo": t.funcao_principal or t.nome or cod, "pessoas": sum(mk.equipe.values()),
+                          "origem": "equipe padrão", "por_modo": False, "detalhe": dict(mk.equipe)}
         t.partes_max = PARTES_MAX if dividir_terceirizadas else 1
         texto = (f"Terceirizar a {nome} (considerando que o terceirizado cobra a mesma mão de obra: "
                  f"{sum(horas.values()):.0f} h = {_reais(extra)})")
