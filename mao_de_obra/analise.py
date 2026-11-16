@@ -5,8 +5,11 @@ Para cada linha de uma composição:
 2. mão de obra (tabela de funções)       → horas por função (categoria indireta: só a equipe fixa, unidade MÊS);
 3. código de um item da planilha          → expande a subcomposição (horas × coeficiente), em profundidade;
 4. código no banco de coeficientes        → horas do banco × coeficiente;
-5. descrição de serviço (palavras-chave)  → subcomposição pendente (horas estimadas depois);
-6. o resto é material.
+5. código na referência (produtividade_referencia.xlsx, aba Referencias);
+6. descrição de serviço (palavras-chave):
+   a. regra da aba "Por descricao" (termos + unidade) → horas da composição SINAPI equivalente;
+   b. senão, subcomposição pendente (horas estimadas pelo custo depois);
+7. o resto é material.
 """
 from __future__ import annotations
 
@@ -20,10 +23,12 @@ from .composicoes import Composicao
 from .funcoes import (
     INDIRETA,
     OPERADOR,
+    RegraDescricao,
     TabelaFuncoes,
     eh_equipamento,
     eh_subcomposicao,
     nome_equipamento,
+    regra_por_descricao,
     unidade_de_mao_de_obra,
     unidade_norm,
 )
@@ -34,7 +39,9 @@ ESTIMADO = "estimado"
 SEM_MAO_DE_OBRA = "sem_mao_de_obra"
 MANUAL = "manual"
 REFERENCIA = "referencia"
-ORIGENS = (COMPOSICAO, BANCO, REFERENCIA, ESTIMADO, MANUAL, SEM_MAO_DE_OBRA)
+REFERENCIA_DESCRICAO = "referencia_descricao"   # ajuste 7.2: regra da aba "Por descricao"
+ORIGENS = (COMPOSICAO, BANCO, REFERENCIA, REFERENCIA_DESCRICAO, ESTIMADO, MANUAL, SEM_MAO_DE_OBRA)
+REAIS = (COMPOSICAO, BANCO, REFERENCIA, REFERENCIA_DESCRICAO, MANUAL)   # horas que não são estimadas
 
 
 class ConsultaBanco(Protocol):
@@ -50,7 +57,7 @@ class BancoVazio:
         return None
 
 
-CONCRETO_CAMINHAO_M3 = 3.0   # ajuste 7.1: padrão "concreto de caminhão a partir de" (m³ por serviço)
+CONCRETO_CAMINHAO_M3 = 5.0   # ajuste 7.2 (era 3 no 7.1): o caminhão mínimo; padrão "concreto de caminhão a partir de" (m³ por serviço)
 
 
 def eh_concreto(descricao: Any, unidade: Any) -> bool:
@@ -87,6 +94,8 @@ class AnaliseComposicao:
     # ajuste 7.1: produção de concreto (subcomposições de concreto do banco, da referência ou pendentes)
     concreto: dict[tuple[str, str], float] = field(default_factory=lambda: defaultdict(float))
     concreto_m3: float = 0.0          # m³ de concreto por unidade do serviço
+    # ajuste 7.2: subcomposições resolvidas pela referência pela descrição (com a regra usada)
+    por_descricao: list[dict[str, Any]] = field(default_factory=list)
 
     def total_horas(self) -> float:
         return sum(self.horas.values())
@@ -102,6 +111,7 @@ class Analisador:
         banco: ConsultaBanco | None = None,
         referencias: Mapping[str, Mapping[str, float]] | None = None,
         concreto_caminhao_m3: float = CONCRETO_CAMINHAO_M3,
+        referencias_descricao: list[RegraDescricao] | None = None,
     ):
         self.composicoes = composicoes
         self.funcoes = funcoes
@@ -110,6 +120,7 @@ class Analisador:
         self.banco = banco or BancoVazio()
         self.referencias = referencias or {}  # código normalizado -> {funcao: h/un} (produtividade_referencia.xlsx)
         self.concreto_caminhao_m3 = concreto_caminhao_m3
+        self.referencias_descricao = referencias_descricao or []   # aba "Por descricao", em ordem
         self._memo: dict[str, AnaliseComposicao] = {}
 
     def analisar_composicao(self, item: str, pilha: tuple[str, ...] = ()) -> AnaliseComposicao:
@@ -164,6 +175,9 @@ class Analisador:
                     acc = res.custos[funcao]
                     for k, v in enumerate(valores):
                         acc[k] += v * coef
+                for d in sub.por_descricao:
+                    res.por_descricao.append({**d, "coeficiente": d["coeficiente"] * coef, "horas_un": d["horas_un"] * coef,
+                                              "via": [linha.codigo] + d.get("via", [])})
                 for p in sub.pendentes:
                     res.pendentes.append({**p, "coeficiente": p["coeficiente"] * coef,
                                           "total_linha": (p["total_linha"] or 0.0) * coef,
@@ -191,6 +205,14 @@ class Analisador:
                                        "concreto": concreto})
                 continue
             if eh_subcomposicao(linha.descricao, self.palavras):
+                regra_desc = regra_por_descricao(self.referencias_descricao, linha.descricao, linha.unidade)
+                if regra_desc:
+                    for funcao, h in regra_desc.horas.items():
+                        if h:
+                            destino[(funcao, REFERENCIA_DESCRICAO)] += h * coef
+                    res.por_descricao.append(_uso_regra(regra_desc, linha.codigo, linha.descricao, linha.unidade, coef,
+                                                        concreto))
+                    continue
                 res.pendentes.append({"codigo": linha.codigo, "descricao": linha.descricao,
                                       "unidade": None if linha.unidade is None else str(linha.unidade),
                                       "coeficiente": coef, "total_linha": linha.total or 0.0, "via": [],
@@ -214,7 +236,7 @@ class Analisador:
         base = {
             "linha_excel": servico.get("linha_excel"), "item": item,
             "composicao": {"aba": comp.aba, "linha": comp.linha_excel, "formato": comp.formato} if comp else None,
-            "horas": {}, "equipamentos": {}, "pendentes": [], "indireta": {}, "expandidos": [],
+            "horas": {}, "equipamentos": {}, "pendentes": [], "por_descricao": [], "indireta": {}, "expandidos": [],
             # funcao -> horas e R$ por unidade das linhas de mão de obra com preço (todas e só as "com encargos")
             "custos_mo": {},
         }
@@ -223,6 +245,7 @@ class Analisador:
             base.update(
                 equipamentos={k: v for k, v in a.equipamentos.items() if v},
                 pendentes=[dict(p) for p in a.pendentes],
+                por_descricao=[dict(d) for d in a.por_descricao],
                 indireta={k: v for k, v in a.indireta.items() if v},
                 expandidos=a.expandidos,
                 custos_mo={f: {"horas_un": v[0], "custo_un": v[1], "horas_un_encargos": v[2], "custo_un_encargos": v[3]}
@@ -238,6 +261,7 @@ class Analisador:
                 if motivo:
                     # concreto de caminhão: a produção do concreto não tem horas (fica lançamento/acabamento)
                     base["pendentes"] = [p for p in base["pendentes"] if not p.get("concreto")]
+                    base["por_descricao"] = [d for d in base["por_descricao"] if not d.get("concreto")]
                     base["concreto_caminhao"] = {"volume_m3": round(volume, 2), "motivo": motivo,
                                                  "horas_retiradas": round(horas_concreto, 2),
                                                  "pendentes_retiradas": sum(1 for p in a.pendentes if p.get("concreto"))}
@@ -253,6 +277,7 @@ class Analisador:
             base["horas"] = {(f, MANUAL): h for f, h in manual.items() if h}
             base["origem"] = MANUAL
             base["pendentes"] = []
+            base["por_descricao"] = []
             return base
         if comp:
             base["horas"] = horas
@@ -273,9 +298,25 @@ class Analisador:
             base["horas"] = {(f, REFERENCIA): h for f, h in da_referencia.items() if h}
             base["origem"] = REFERENCIA
             return base
+        regra_desc = regra_por_descricao(self.referencias_descricao, servico.get("descricao"), servico.get("unidade"))
+        if regra_desc:
+            base["horas"] = {(f, REFERENCIA_DESCRICAO): h for f, h in regra_desc.horas.items() if h}
+            base["origem"] = REFERENCIA_DESCRICAO if base["horas"] else SEM_MAO_DE_OBRA
+            base["por_descricao"] = [_uso_regra(regra_desc, servico.get("codigo"), servico.get("descricao"),
+                                                servico.get("unidade"), 1.0, False, servico_inteiro=True)]
+            return base
         base["origem"] = ESTIMADO  # sem composição, banco nem referência: estimar pelo custo
         base["estimar_servico_inteiro"] = True
         return base
+
+
+def _uso_regra(regra: RegraDescricao, codigo: Any, descricao: Any, unidade: Any, coef: float, concreto: bool,
+               servico_inteiro: bool = False) -> dict[str, Any]:
+    """Registro de uma subcomposição (ou serviço) resolvida pela referência pela descrição, para as telas."""
+    return {"codigo": None if codigo is None else str(codigo), "descricao": descricao,
+            "unidade": None if unidade is None else str(unidade), "coeficiente": coef,
+            "horas_un": sum(regra.horas.values()) * coef, "regra": regra.resumo(), "concreto": concreto, "via": [],
+            "servico_inteiro": servico_inteiro}
 
 
 def mapa_codigo_item(servicos: Iterable[Mapping[str, Any]]) -> dict[str, str]:

@@ -7,7 +7,7 @@ from typing import Any, Iterable, Mapping
 
 from leitor_planilha.texto import unidade_canonica
 
-from .analise import BANCO, COMPOSICAO, ESTIMADO, MANUAL, REFERENCIA, SEM_MAO_DE_OBRA
+from .analise import BANCO, COMPOSICAO, ESTIMADO, MANUAL, REAIS, REFERENCIA, REFERENCIA_DESCRICAO, SEM_MAO_DE_OBRA
 from .funcoes import juntar_horas
 
 PROPRIA = "propria"
@@ -17,8 +17,12 @@ EXECUCOES = (PROPRIA, TERCEIRIZADA)
 INDIRETA = "indireta"
 
 PARAMETROS_PADRAO = {"horas_semana": 44.0, "dias_semana": 5, "rendimento": 0.90, "mudancas_jornada": [],
-                     "volume_caminhao": 8.0, "caminhoes_dia": 3, "juntar": {},
-                     "concreto_caminhao_m3": 3.0}
+                     "volume_caminhao": 8.0, "caminhoes_dia": None, "juntar": {},
+                     "concreto_caminhao_m3": 5.0}
+# ajuste 7.2: caminhoes_dia vazio = sem limite (a concretagem fica limitada pela equipe de lançamento);
+# concreto de caminhão a partir de 5 m³ (o caminhão mínimo); volume por caminhão entre 5 e 10 m³
+VOLUME_CAMINHAO_FAIXA = (5.0, 10.0)
+LIMITE_AVISO_ESTIMADO = 10.0   # % das horas de uma atividade estimadas por custo: acima disso, aviso
 EQUIPE_PADRAO = 2
 EQUIPE_MAX = 20
 CONCRETAGEM = "concretagem"
@@ -266,7 +270,7 @@ def _soma_horas(analise: Mapping[str, Any], qtd: float, origens: Iterable[str] |
 
 
 def _completo(analise: Mapping[str, Any]) -> bool:
-    return (analise["origem"] in (COMPOSICAO, BANCO, REFERENCIA, MANUAL) and not analise["pendentes"]
+    return (analise["origem"] in REAIS and not analise["pendentes"]
             and any(h["horas_un"] > 0 for h in analise["horas"]))
 
 
@@ -413,6 +417,9 @@ def calcular_obra(
                 equip[e] += h * qtd
             custo_por_origem[a["origem"]] += s.get("total") or 0.0
             custo_origem_ativ[a["origem"]] += s.get("total") or 0.0
+        total_ativ = sum(por_origem.values())
+        estimadas_ativ = por_origem.get(ESTIMADO, 0.0)
+        pct_estimado = 100 * estimadas_ativ / total_ativ if total_ativ > 0 else 0.0
         # ajuste 7.1: em atividade própria, horas de função que a empresa não tem (Serralheiro, Montador) ficam fora
         horas_de_terceirizado: dict[str, float] = {}
         if ex.get("execucao") == PROPRIA:
@@ -490,6 +497,10 @@ def calcular_obra(
                                     for f, h in horas_de_terceirizado.items()],
             "horas_ajustadas": {f: round(h, 2) for f, h in sorted(ajustadas.items(), key=lambda x: -x[1])},
             "horas_por_origem": {o: round(h, 2) for o, h in por_origem.items() if h},
+            "horas_estimadas": round(estimadas_ativ, 2),
+            "percentual_estimado": round(pct_estimado, 1),
+            "aviso_estimado": (f"{pct_estimado:.0f}% das horas estimadas por custo: confira em "
+                               "\"Horas estimadas para conferir\"") if pct_estimado > LIMITE_AVISO_ESTIMADO else None,
             "custo_por_origem": {o: round(c, 2) for o, c in custo_origem_ativ.items() if c},
             "horas_equipamento": {e: round(h, 2) for e, h in sorted(equip.items(), key=lambda x: -x[1])},
             "funcao_principal": calc["funcao_principal"] if calc else None,
@@ -516,8 +527,12 @@ def calcular_obra(
     custo_total = sum(custo_por_origem.values())
     cobertura = {o: {"custo": round(custo_por_origem.get(o, 0.0), 2),
                      "percentual": round(100 * custo_por_origem.get(o, 0.0) / custo_total, 2) if custo_total else 0.0}
-                 for o in (COMPOSICAO, BANCO, REFERENCIA, ESTIMADO, MANUAL, SEM_MAO_DE_OBRA)}
-    com_horas = sum(cobertura[o]["custo"] for o in (COMPOSICAO, BANCO, REFERENCIA, ESTIMADO, MANUAL))
+                 for o in (COMPOSICAO, BANCO, REFERENCIA, REFERENCIA_DESCRICAO, ESTIMADO, MANUAL, SEM_MAO_DE_OBRA)}
+    com_horas = sum(cobertura[o]["custo"] for o in (COMPOSICAO, BANCO, REFERENCIA, REFERENCIA_DESCRICAO, ESTIMADO, MANUAL))
+    # ajuste 7.2: horas estimadas por custo nas atividades próprias
+    proprias = [a for a in resultado_ativ if a["execucao"] == PROPRIA]
+    horas_proprias = sum(sum(a["horas_brutas"].values()) for a in proprias)
+    estimadas = sum(a["horas_estimadas"] for a in proprias)
     return {
         "parametros": {**params, "horas_por_dia": round(hd, 4)},
         "atividades": sorted(resultado_ativ, key=lambda a: a["ordem_biblioteca"]),
@@ -527,6 +542,10 @@ def calcular_obra(
         "cobertura": cobertura,
         "cobertura_com_horas": round(100 * com_horas / custo_total, 2) if custo_total else 0.0,
         "custo_sem_indiretas": round(custo_total, 2),
+        "estimadas": {"horas": round(estimadas, 1), "horas_proprias": round(horas_proprias, 1),
+                      "percentual": round(100 * estimadas / horas_proprias, 1) if horas_proprias else 0.0,
+                      "atividades_acima": [a["codigo"] for a in proprias if a["aviso_estimado"]],
+                      "limite_percentual": LIMITE_AVISO_ESTIMADO},
         "pendencias": pendencias,
         "avisos": avisos,
     }

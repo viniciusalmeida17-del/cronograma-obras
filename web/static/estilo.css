@@ -480,3 +480,5 @@ table.equipe-semana tr.terceirizado td:first-child { font-style: italic; }
 /* ajuste 7.1 */
 .concreto-caminhao { display: block; font-size: 11px; color: #2c5f8a; background: #eaf2fa; border-radius: 3px; padding: 1px 6px; margin-top: 2px; width: fit-content; }
 #conferir-terceirizadas input { font-size: 13px; }
+/* ajuste 7.2: horas estimadas por custo acima de 10% da atividade */
+.aviso-estimado { display: inline-block; padding: 0 6px; border-radius: 3px; background: #fff4d6; color: #8a6500; font-weight: 600; font-size: 11px; }

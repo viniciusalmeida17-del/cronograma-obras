@@ -7,6 +7,7 @@ const ORIGENS = {
   banco: { rotulo: "banco", cor: "#6b8fc7" },
   manual: { rotulo: "manual", cor: "#2e8b57" },
   referencia: { rotulo: "referência", cor: "#1baf7a" },
+  referencia_descricao: { rotulo: "referência pela descrição", cor: "#7cc9a5" },
   estimado: { rotulo: "estimado", cor: "#e0b000" },
   sem_mao_de_obra: { rotulo: "sem mão de obra", cor: "#c8cdd4" },
 };
@@ -52,6 +53,7 @@ function desenhar() {
     ["Horas por dia", fmtH4.format(d.parametros.horas_por_dia)],
     ["Rendimento", Math.round(d.parametros.rendimento * 100) + "%"],
     ["Cobertura com horas", d.cobertura_com_horas.toLocaleString("pt-BR") + "%"],
+    ["Estimadas por custo", `${horas(d.estimadas?.horas)} h (${(d.estimadas?.percentual || 0).toLocaleString("pt-BR")}%)`],
     ["Pendências", pend],
   ];
   $("#numeros").innerHTML = caixas.map(([t, v]) => `<div class="numero"><span>${t}</span><b>${v}</b></div>`).join("");
@@ -90,8 +92,11 @@ function desenharParametros() {
   f.dias_semana.value = String(p.dias_semana);
   f.rendimento.value = Math.round(p.rendimento * 1000) / 10;
   f.volume_caminhao.value = p.volume_caminhao;
-  f.caminhoes_dia.value = p.caminhoes_dia;
-  f.concreto_caminhao_m3.value = p.concreto_caminhao_m3 ?? 3;
+  f.caminhoes_dia.value = p.caminhoes_dia ?? "";
+  f.concreto_caminhao_m3.value = p.concreto_caminhao_m3 ?? 5;
+  const av = est.d.avisos_parametros || [];
+  $("#avisos-parametros").hidden = !av.length;
+  $("#avisos-parametros").textContent = av.join(" ");
   const j = est.d.juntar || { possivel: {}, obra: {} };
   $("#lista-juntar").innerHTML = Object.entries(j.possivel).map(([fn, destino]) => `<label class="inline">
       <input type="checkbox" name="juntar" data-funcao="${esc(fn)}" data-destino="${esc(destino)}" ${j.obra && j.obra[fn] ? "checked" : ""}>
@@ -226,7 +231,7 @@ function desenharAtividades() {
     const bruto = soma(a.horas_brutas), ajust = soma(a.horas_ajustadas), eq = soma(a.horas_equipamento);
     const pend = !a.duracao || !a.execucao;
     return `<tr class="linha-ativ ${aberta ? "aberta" : ""} ${pend ? "pendente-linha" : ""}" data-codigo="${a.codigo}">
-      <td><span class="seta">${aberta ? "▾" : "▸"}</span> <b>${a.codigo}</b> ${esc(a.nome)}<span class="linha-excel">${a.n_itens} ${a.n_itens === 1 ? "item" : "itens"} · ${esc(a.etapa)}${a.trocas_aplicadas?.length ? ` · <span class="troca" title="${esc(a.trocas_aplicadas.map(textoTroca).join("\n"))}">função trocada</span>` : ""}${a.avisos_terceirizado?.length ? ` · <span class="falta" title="${esc(a.avisos_terceirizado.join("\n"))}">horas de terceirizado fora</span>` : ""}${a.terceirizado ? ` · <span class="${a.terceirizado.origem === "sem estimativa" ? "falta" : "troca"}" title="${esc(a.terceirizado.aviso || `origem: ${a.terceirizado.origem}`)}">${esc(a.terceirizado.nome)}: ${a.terceirizado.pessoas || "?"}</span>` : ""}</span></td>
+      <td><span class="seta">${aberta ? "▾" : "▸"}</span> <b>${a.codigo}</b> ${esc(a.nome)}<span class="linha-excel">${a.n_itens} ${a.n_itens === 1 ? "item" : "itens"} · ${esc(a.etapa)}${a.trocas_aplicadas?.length ? ` · <span class="troca" title="${esc(a.trocas_aplicadas.map(textoTroca).join("\n"))}">função trocada</span>` : ""}${a.avisos_terceirizado?.length ? ` · <span class="falta" title="${esc(a.avisos_terceirizado.join("\n"))}">horas de terceirizado fora</span>` : ""}${a.terceirizado ? ` · <span class="${a.terceirizado.origem === "sem estimativa" ? "falta" : "troca"}" title="${esc(a.terceirizado.aviso || `origem: ${a.terceirizado.origem}`)}">${esc(a.terceirizado.nome)}: ${a.terceirizado.pessoas || "?"}</span>` : ""}${a.aviso_estimado && a.execucao === "propria" ? ` · <span class="aviso-estimado" title="${esc(`${horas(a.horas_estimadas)} h estimadas por custo. ${a.aviso_estimado}`)}">${fmtH.format(a.percentual_estimado)}% estimado</span>` : ""}</span></td>
       <td>${a.execucao ? `<span class="selo-exec ${a.execucao}">${a.execucao === "propria" ? "própria" : "terceirizada"}</span>` : '<span class="falta">escolher</span>'}</td>
       <td>${esc(a.funcao_principal || "—")}</td>
       <td class="num" title="${Object.entries(a.horas_ajustadas).map(([f, h]) => `${f}: ${horas(h)} h`).join("\n")}">${horas(bruto)} → <b>${horas(ajust)}</b></td>
@@ -314,6 +319,7 @@ function detalheAtividade(a, servs) {
       <p class="mensagem msg-ativ"></p>
     </form>
     ${(a.avisos_terceirizado || []).map((t) => `<p class="aviso-sem-estimativa">${esc(t)}.</p>`).join("")}
+    ${a.aviso_estimado && a.execucao === "propria" ? `<p class="aviso-sem-estimativa">${horas(a.horas_estimadas)} h (${fmtH.format(a.percentual_estimado)}%) das horas desta atividade são estimadas por custo: ${esc(a.aviso_estimado.split(": ").slice(1).join(": "))}.</p>` : ""}
     ${a.execucao === "terceirizada" ? formTerceirizado(a) : formTrocas(a)}
     <p class="discreto">Equipe padrão: ${equipe}${maquinas ? `<br>Equipamentos: ${maquinas}` : ""}${c ? `<br>Duração exata ${fmtH.format(c.dias_exatos)} dias (limitada por ${{ equipamento: "equipamento", concretagem: `concretagem: ${fmtH.format(a.volume_m3 || 0)} m³` }[c.limitante] || "mão de obra"})` : ""}${a.duracao_fixa_dias ? `<br>Duração fixa da biblioteca: ${a.duracao_fixa_dias} dias corridos` : ""}</p>
     <table class="servicos"><thead><tr><th>Item</th><th class="desc">Serviço</th><th class="num">Quant.</th><th>Origem</th><th>Horas por função (h/un → total)</th><th></th></tr></thead><tbody>
@@ -335,14 +341,27 @@ function linhaServico(s) {
       <td class="num estimado">${p.horas_estimadas != null ? horas(p.horas_estimadas) : "—"}</td>
       <td>${p.codigo ? `<button type="button" class="secundario pequeno" data-sub='${esc(JSON.stringify({ codigo: p.codigo, descricao: p.descricao, unidade: p.unidade }))}'>Digitar h/un</button>` : ""}</td></tr>`).join("")}
     </tbody></table></details>` : "";
+  const porDesc = (s.por_descricao || []).length ? `<details class="pendentes-sub"><summary>${s.por_descricao.length} pela referência pela descrição</summary>
+    <table class="simples"><thead><tr><th>Código</th><th>Descrição</th><th class="num">Coef.</th><th>Regra usada</th><th class="num">Horas</th></tr></thead><tbody>
+    ${s.por_descricao.map((p) => `<tr><td>${esc(p.codigo || "—")}${p.via?.length ? `<small class="discreto"> via ${esc(p.via.join(" › "))}</small>` : ""}</td><td>${esc((p.descricao || "").slice(0, 110))}</td>
+      <td class="num">${fmtH4.format(p.coeficiente || 0)} ${esc(p.unidade || "")}</td>
+      <td>${textoRegra(p.regra)}</td>
+      <td class="num">${horas(p.horas_un * (s.quantidade || 0))}</td></tr>`).join("")}
+    </tbody></table></details>` : "";
   return `<tr class="${s.origem === "estimado" ? "linha-estimada" : ""}">
     <td class="nowrap">${esc(s.item)}<span class="linha-excel">linha ${s.linha_excel}</span></td>
-    <td class="desc">${esc(s.descricao)}<span class="linha-excel">${esc(s.base || "")} ${esc(s.codigo || "")}</span>${s.concreto_caminhao ? `<span class="concreto-caminhao" title="${esc(`${s.concreto_caminhao.motivo}; ${horas(s.concreto_caminhao.horas_retiradas)} h de produção de concreto retiradas`)}">concreto de caminhão: produção do concreto sem horas</span>` : ""}${pend}</td>
+    <td class="desc">${esc(s.descricao)}<span class="linha-excel">${esc(s.base || "")} ${esc(s.codigo || "")}</span>${s.concreto_caminhao ? `<span class="concreto-caminhao" title="${esc(`${s.concreto_caminhao.motivo}; ${horas(s.concreto_caminhao.horas_retiradas)} h de produção de concreto retiradas`)}">concreto de caminhão: produção do concreto sem horas</span>` : ""}${porDesc}${pend}</td>
     <td class="num">${fmtH4.format(s.quantidade || 0)} ${esc(s.unidade)}</td>
     <td><span class="selo-origem ${s.origem}">${ORIGENS[s.origem]?.rotulo}</span>${s.estimativa ? `<small class="discreto"><br>razão da ${s.estimativa.nivel}</small>` : ""}${s.estimativa?.limitada ? `<br><span class="limitada" title="Sem o limite: ${horas(s.estimativa.horas_sem_limite)} h">estimativa limitada, revisar</span>` : ""}</td>
     <td class="horas-servico">${htmlHoras}</td>
     <td><button type="button" class="secundario pequeno" data-servico="${s.id}">Digitar h/un</button></td>
   </tr>`;
+}
+
+function textoRegra(r) {
+  if (!r) return "—";
+  const como = r.material ? "só material (0 h)" : r.equivale_a ? `como ${r.equivale_a}` : "";
+  return `regra ${r.ordem}: <b>${esc(r.termos)}</b> (${esc(r.unidade)})${como ? ` · ${esc(como)}` : ""}`;
 }
 
 $("#tabela-atividades").addEventListener("click", (e) => {
@@ -486,12 +505,32 @@ function desenharResumo() {
     : "Prazo da licitação não informado: sem média de pessoas.";
   $("#tabela-funcoes").innerHTML = d.resumo_funcoes.map((f) => `<tr><td>${esc(f.funcao)}</td><td class="num">${horas(f.horas_ajustadas)}</td>
     <td class="num"><b>${f.media_pessoas != null ? f.media_pessoas.toLocaleString("pt-BR") : "—"}</b></td></tr>`).join("");
+  const e = d.estimadas || {};
+  $("#resumo-estimadas").innerHTML = `Total estimado por custo nas atividades próprias: <b>${horas(e.horas)} h</b>, `
+    + `<b>${(e.percentual || 0).toLocaleString("pt-BR")}%</b> das ${horas(e.horas_proprias)} h próprias.`
+    + (e.atividades_acima?.length ? ` <span class="aviso-estimado">Mais de ${e.limite_percentual}% estimado em: ${e.atividades_acima.map(esc).join(", ")}</span>` : "");
+  const lista = d.estimadas_conferir || [];
+  $("#tabela-estimadas").innerHTML = lista.length
+    ? `<thead><tr><th>Item</th><th>Código</th><th>Descrição</th><th>Un.</th><th class="num">Custo</th><th class="num">Horas estimadas</th><th>Atividade</th><th></th></tr></thead><tbody>
+      ${lista.map((x) => `<tr><td class="nowrap">${esc(x.item)}</td><td>${esc(x.codigo || "—")}</td>
+        <td>${esc((x.descricao || "").slice(0, 120))}${x.servico_inteiro ? ' <small class="discreto">(serviço inteiro)</small>' : ""}</td>
+        <td>${esc(x.unidade || "")}</td><td class="num">${reais(x.custo)}</td><td class="num estimado">${horas(x.horas)}</td>
+        <td title="${esc(x.nome_atividade || "")}">${esc(x.atividade || "—")}</td>
+        <td>${x.servico_inteiro ? `<button type="button" class="secundario pequeno" data-servico="${x.servico}">Digitar h/un</button>`
+          : x.codigo ? `<button type="button" class="secundario pequeno" data-sub='${esc(JSON.stringify({ codigo: x.codigo, descricao: x.descricao, unidade: x.unidade }))}'>Digitar h/un</button>` : ""}</td></tr>`).join("")}</tbody>`
+    : `<tbody><tr><td class="discreto">✔ Nenhuma hora estimada por custo.</td></tr></tbody>`;
   const cob = d.cobertura;
   const ordem = Object.keys(ORIGENS).filter((o) => cob[o]);
   $("#barra-cobertura").innerHTML = ordem.map((o) => [o, cob[o]]).map(([o, c]) => `<span style="width:${c.percentual}%;background:${ORIGENS[o].cor}" title="${ORIGENS[o].rotulo}: ${c.percentual}%"></span>`).join("");
   $("#tabela-cobertura").innerHTML = ordem.map((o) => [o, cob[o]]).map(([o, c]) => `<tr><td><i class="quadrado" style="background:${ORIGENS[o].cor}"></i>${ORIGENS[o].rotulo}</td>
     <td class="num">${reais(c.custo)}</td><td class="num">${c.percentual.toLocaleString("pt-BR")}%</td></tr>`).join("");
 }
+$("#tabela-estimadas").addEventListener("click", (e) => {
+  const bServ = e.target.closest("[data-servico]");
+  const bSub = e.target.closest("[data-sub]");
+  if (bServ) abrirHorasServico(Number(bServ.dataset.servico));
+  if (bSub) abrirHorasSub(JSON.parse(bSub.dataset.sub));
+});
 $("#cartao-pendencias").addEventListener("click", (e) => {
   const a = e.target.closest("[data-ir]");
   if (!a) return;

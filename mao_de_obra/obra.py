@@ -13,7 +13,8 @@ from leitor_planilha.texto import unidade_canonica
 from .analise import COMPOSICAO, ESTIMADO, MANUAL, Analisador, chave_codigo, mapa_codigo_item
 from .calculo import EQUIPE_MAX, EQUIPE_PADRAO, EXECUCOES, INDIRETA, PERGUNTAR, TERCEIRIZADA, calcular_obra
 from .composicoes import ler_composicoes
-from .funcoes import TabelaFuncoes, carregar_funcoes, carregar_palavras_subcomposicao, carregar_referencias
+from .funcoes import (TabelaFuncoes, carregar_funcoes, carregar_palavras_subcomposicao, carregar_referencias,
+                      carregar_referencias_descricao)
 
 
 class ErroMaoDeObra(Exception):
@@ -81,7 +82,8 @@ def analisar_obra(
     lidas = ler_composicoes(arquivo, dados["obra"].get("aba"))
     servicos = dados["servicos"]
     analisador = Analisador(lidas.composicoes, funcoes, palavras, mapa_codigo_item(servicos), banco.consulta_coeficientes(),
-                            carregar_referencias(funcoes), banco.carregar_parametros(obra_id)["concreto_caminhao_m3"])
+                            carregar_referencias(funcoes), banco.carregar_parametros(obra_id)["concreto_caminhao_m3"],
+                            carregar_referencias_descricao(funcoes))
     manuais = banco.horas_manuais(obra_id)
     analises = {s["id"]: analisador.analisar_servico(s, manuais.get(s["id"])) for s in servicos}
     banco.gravar_analises(obra_id, analises)
@@ -176,8 +178,11 @@ def estado_mao_de_obra(banco: Banco, obra_id: int, biblioteca: Biblioteca | None
             "equipamentos": a["equipamentos"], "pendentes": a["pendentes"], "indireta": a["indireta"],
             "estimativa": a.get("estimativa"),
             "concreto_caminhao": a.get("concreto_caminhao"),
+            "por_descricao": a.get("por_descricao") or [],
         })
     resultado["servicos"] = servicos
+    resultado["estimadas_conferir"] = estimadas_para_conferir(servicos, atividades)
+    resultado["avisos_parametros"] = avisos_parametros(parametros)
     resultado["obra"] = {k: obra.get(k) for k in ("id", "numero", "nome", "arquivo", "prazo_valor", "prazo_unidade",
                                                    "composicoes_abas")}
     resultado["abas_composicoes"] = _json(obra.get("composicoes_abas"))
@@ -192,6 +197,41 @@ def estado_mao_de_obra(banco: Banco, obra_id: int, biblioteca: Biblioteca | None
 
 
 _reprocessando: dict[int, bool] = {}
+
+
+def estimadas_para_conferir(servicos: list[dict[str, Any]], atividades: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Ajuste 7.2: cada subcomposição (ou serviço inteiro) estimada pelo custo, das maiores horas para as menores."""
+    lista = []
+    for s in servicos:
+        est = s.get("estimativa")
+        if not est:
+            continue
+        qtd = s.get("quantidade") or 0.0
+        base = {"servico": s["id"], "item": s["item"], "atividade": s.get("atividade"),
+                "nome_atividade": (atividades.get(s.get("atividade")) or {}).get("nome")}
+        if not s["pendentes"]:
+            lista.append({**base, "codigo": s.get("codigo"), "descricao": s.get("descricao"), "unidade": s.get("unidade"),
+                          "custo": round(s.get("total") or 0.0, 2), "horas": round(est.get("horas") or 0.0, 1),
+                          "servico_inteiro": True})
+            continue
+        for p in s["pendentes"]:
+            lista.append({**base, "codigo": p.get("codigo"), "descricao": p.get("descricao"), "unidade": p.get("unidade"),
+                          "custo": round((p.get("total_linha") or 0.0) * qtd, 2),
+                          "horas": round(p.get("horas_estimadas") or 0.0, 1), "servico_inteiro": False})
+    lista.sort(key=lambda x: (-x["horas"], x["item"] or ""))
+    return lista
+
+
+def avisos_parametros(p: dict[str, Any]) -> list[str]:
+    """Ajuste 7.2: volume por caminhão fora de 5 a 10 m³ é aceito, com aviso."""
+    from .calculo import VOLUME_CAMINHAO_FAIXA
+
+    v = p.get("volume_caminhao")
+    mn, mx = VOLUME_CAMINHAO_FAIXA
+    if v and not mn <= float(v) <= mx:
+        return [f"Volume por caminhão de {float(v):g} m³: o normal é de {mn:g} a {mx:g} m³ "
+                f"(mínimo {mn:g}, média de 8 m³ em concretagem grande)."]
+    return []
 
 
 def quantidade_principal(servicos: Iterable[dict[str, Any]], codigo: str) -> tuple[float, str | None]:
@@ -286,6 +326,9 @@ def salvar_parametros(banco: Banco, obra_id: int, dados: dict[str, Any]) -> bool
         mudancas.append({"a_partir_de": data, "horas_semana": horas})
     p["mudancas_jornada"] = sorted(mudancas, key=lambda m: m["a_partir_de"])
     for campo, nome in (("volume_caminhao", "Volume por caminhão (m³)"), ("caminhoes_dia", "Caminhões de concreto por dia")):
+        if campo == "caminhoes_dia" and (p.get(campo) is None or str(p.get(campo)).strip() == ""):
+            p[campo] = None   # ajuste 7.2: vazio = sem limite de caminhões por dia
+            continue
         try:
             p[campo] = float(str(p.get(campo)).replace(",", "."))
         except (TypeError, ValueError):

@@ -227,7 +227,7 @@ a pasta `arquivos_obras/` fica ao lado do banco),
   término de A + N. Formato antigo (`FUN-04+3d`) continua aceito. Na herança, fica o tipo do elo de quem fica e as
   esperas somam (unidades diferentes → dias úteis, 7 corridos ≈ 5 úteis). EST-03 = 21 dias corridos (item 6); só a REV-01 espera a cura.
 - **Concretagem** (`tipo_producao = concretagem`): duração ≥ teto(m³ da atividade ÷ (m³ por caminhão × caminhões por dia));
-  parâmetros da obra (padrão 8 m³ e 3 caminhões).
+  parâmetros da obra (padrão 8 m³ e 3 caminhões; desde o ajuste 7.2, caminhões por dia vazio = sem limite).
 - **Equipes e máquinas**: `equipe_max` vazio = 20; o otimizador testa 1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20. Máquinas de cada
   equipamento de 1 até o máximo (padrão 6, por obra e por atividade); em atividade própria cada máquina traz 1 Operador/Motorista.
 - **Funções da empresa** (`funcoes.xlsx`): Servente, Pedreiro, Pedreiro de acabamento, Carpinteiro, Armador, Bombeiro,
@@ -361,7 +361,7 @@ Especificação em `ITEM_7_1_TERCEIRIZADOS_E_CONCRETO.md`.
   - Diagnóstico de prazo: terceirizada no caminho crítico gera "aumentar as pessoas do terceirizado X de A para B
     reduz N dias" (duração na proporção, produção × B ÷ A), calculado de verdade; **Aplicar e recalcular** grava
     pessoas e produção como digitados na obra.
-- **Concreto de caminhão** (parâmetro da etapa 4 "concreto de caminhão a partir de", padrão **3 m³** por serviço, o
+- **Concreto de caminhão** (parâmetro da etapa 4 "concreto de caminhão a partir de", padrão **3 m³** por serviço — 5 m³ desde o 7.2 —, o
   valor fica como padrão das próximas obras): serviço com USINADO ou BOMBEADO na descrição, ou com volume de concreto
   ≥ o parâmetro (a quantidade, se em M3; senão quantidade × coeficiente da subcomposição de concreto), não tem horas de
   **produção do concreto**: as subcomposições de concreto (descrição começando com "CONCRETO", em m³) ficam com 0 h
@@ -372,6 +372,41 @@ Especificação em `ITEM_7_1_TERCEIRIZADOS_E_CONCRETO.md`.
   terceirizado`. Em atividade **própria**, essas horas não entram na equipe própria, na duração nem no custo (aviso
   "N h de Serralheiro são de terceirizado e não entram na equipe própria"); essas funções saem das listas de funções
   da empresa (parâmetros, equipe por semana).
-- Testes: `tests/test_item71.py`. A QUA-02 continua acima de 2.000 h depois da regra do concreto (estimativas por
-  custo de junta serrada, armação, polimento e lançamento): o teste da faixa 1.300–2.000 h está marcado como
-  falha esperada, com o motivo, para o engenheiro decidir.
+- Testes: `tests/test_item71.py`. (A faixa de 1.300–2.000 h da QUA-02 estava errada; o ajuste 7.2 a trocou.)
+- *Ajuste 7.2:* o padrão do concreto de caminhão passou de 3 para **5 m³**.
+
+## Ajuste 7.2 — horas das subcomposições e concreto de caminhão
+
+Especificação em `ITEM_7_2_HORAS_DAS_SUBCOMPOSICOES.md`.
+
+- **Ordem de busca das horas de uma subcomposição**: composição no arquivo → banco de coeficientes → referência pelo
+  código (aba `Referencias`) → **referência pela descrição** (aba `Por descricao`) → estimativa por custo. As
+  subcomposições de concreto de caminhão continuam com 0 h antes de tudo isso. Serviço sem composição segue a mesma
+  ordem (banco → código → descrição → estimativa do serviço inteiro).
+- **`dados/produtividade_referencia.xlsx`**: aba `Referencias` com 9 composições SINAPI novas (98577, 98575, 97090,
+  97097, 97096, 90280, 87630, 103317, 103321) e aba nova **`Por descricao`** (colunas `ordem`, `termos_na_descricao`,
+  `unidade`, `mao_de_obra`, `horas_por_unidade`, `equivale_a`, `observacao`; linhas com a mesma ordem formam uma
+  regra, uma por mão de obra).
+  - A regra vale quando **todos** os termos separados por `&` aparecem **em qualquer parte** da descrição (sem
+    acento nem maiúsculas) **e** a unidade é a mesma. Vale a **primeira** pela ordem (as mais específicas antes:
+    `19X19X39` antes de `9X19X39`). Só se aplica a linhas que seriam subcomposição pendente (palavras-chave).
+  - `mao_de_obra` passa pela `funcoes.xlsx` (ajudante de armador e operador de betoneira → Servente);
+    `MATERIAL` com 0 h = só material (ex.: fornecimento de laje treliçada): 0 h e fora da estimativa.
+  - A aba é editável. Ao carregar, valida unidade preenchida, horas ≥ 0 e mão de obra reconhecida (ou `MATERIAL`);
+    erro com o número da linha.
+  - Origem nova nas telas: **referência pela descrição** (`referencia_descricao`). No detalhe do serviço, a lista
+    "N pela referência pela descrição" mostra a regra usada e o `equivale_a` (ex.: "como SINAPI 97096").
+- **Estimativa por custo: último recurso, sempre à vista.** A regra é a mesma (razão horas/custo, limite de 3×).
+  - Aba Resumo da obra: lista **"Horas estimadas para conferir"**: cada subcomposição (ou serviço inteiro) estimada,
+    com item, código, descrição, unidade, custo, horas e atividade, das maiores horas para as menores, com o botão
+    **Digitar h/un** na linha.
+  - Total de horas estimadas e % das horas próprias (no Resumo e nos números do topo). Atividade com mais de **10%**
+    das horas estimadas por custo ganha o selo amarelo "N% estimado" e um aviso no detalhe.
+- **Concreto de caminhão** (decisão do engenheiro: caminhão de 5 a 10 m³, média de 8 m³ em concretagem grande):
+  - "Concreto de caminhão a partir de": padrão **5 m³** por serviço (o caminhão mínimo); abaixo, betoneira na obra.
+  - "Volume por caminhão": padrão 8 m³; fora de 5 a 10 m³ o valor é aceito, com aviso.
+  - "Caminhões por dia": padrão **vazio = sem limite**: a concretagem fica limitada pela equipe de lançamento. Digitar
+    um máximo (usina longe, rua estreita) volta a regra da etapa 5.1 (duração mínima = volume ÷ (m³ por caminhão ×
+    caminhões por dia)). Obras que já tinham salvo 3 continuam com 3 até o campo ser apagado.
+- Testes: `tests/test_item72.py` e, no `tests/test_item71.py`, a QUA-02 entre **2.700 e 3.000 h** (sem a marca de
+  falha esperada; a junta serrada do SINAPI é mesmo trabalhosa).

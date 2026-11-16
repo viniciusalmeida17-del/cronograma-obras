@@ -249,24 +249,44 @@ def test_concreto_de_caminhao_na_planilha(obra71, biblioteca):
     # PEX-02: só as horas da composição (a referência do concreto em betoneira, 94964, saiu)
     assert {h["origem"] for h in pex["horas"]} == {"composicao"}
     assert _horas_ativ(est, "PEX-02") == pytest.approx(943.4, abs=1)
-    assert not any(h["origem"] == "referencia" and h["horas_total"] > 10 for h in qua["horas"])
+    # as 448,6 h do concreto em betoneira (102475: 0,12 m³/m² × 876 m² × 4,27 h/m³) saíram;
+    # as horas de referência que ficam são da junta, da armação e da lona (ajuste 7.2)
+    assert qua["concreto_caminhao"]["horas_retiradas"] == pytest.approx(0.12 * 876.09 * (2.6125 + 1.6542), abs=1)
+    assert "Operador/Motorista" not in {h["funcao"] for h in qua["horas"]}
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Relatado ao engenheiro (seção 2): depois da regra do concreto, a QUA-02 fica com ~3.845 h. As 454 h do "
-    "concreto em betoneira saíram, mas 2.525 h são estimadas pelo custo de subcomposições que não são concreto "
-    "(junta serrada 98577, armação 97090, polimento ED-50619, lançamento ED-48324). O teste não foi mudado."))
-def test_qua02_cai_para_perto_das_horas_da_composicao(obra71, biblioteca):
+def test_qua02_com_as_horas_reais_das_subcomposicoes(obra71, biblioteca):
+    # ajuste 7.2: a faixa de 1.300 a 2.000 h do 7.1 estava errada (a junta serrada do SINAPI é trabalhosa: ~1.289 h).
+    # Com 98577 e 97090 pelo código e ED-50619 e ED-48324 pela descrição, a QUA-02 fica em torno de 2.860 h.
     banco, obra = obra71
     est = etapa4.estado_mao_de_obra(banco, obra, biblioteca)
-    assert 1300 <= _horas_ativ(est, "QUA-02") <= 2000
+    assert 2700 <= _horas_ativ(est, "QUA-02") <= 3000
+    qua = _servico(est, "15.2.2")
+    assert qua["pendentes"] == [] and qua["estimativa"] is None
+    pela_descricao = {d["codigo"]: d["regra"]["equivale_a"] for d in qua["por_descricao"]}
+    assert pela_descricao == {"ED-50619": "SINAPI 97097", "ED-48324": "SINAPI 97096"}
+    assert {"98577", "97090"} <= {str(e["codigo"]) for e in banco_expandidos(banco, obra, "15.2.2") if e.get("referencia")}
+
+
+def banco_expandidos(banco, obra, item):
+    """Subcomposições expandidas de um serviço (a análise não grava os expandidos; refaz com o Analisador)."""
+    from mao_de_obra.analise import mapa_codigo_item
+    from mao_de_obra.composicoes import ler_composicoes
+    from mao_de_obra.funcoes import carregar_palavras_subcomposicao, carregar_referencias, carregar_referencias_descricao
+
+    tab = carregar_funcoes()
+    servicos = banco.carregar_obra(obra)["servicos"]
+    an = Analisador(ler_composicoes(banco.arquivo_da_obra(obra)).composicoes, tab, carregar_palavras_subcomposicao(),
+                    mapa_codigo_item(servicos), banco.consulta_coeficientes(), carregar_referencias(tab),
+                    banco.carregar_parametros(obra)["concreto_caminhao_m3"], carregar_referencias_descricao(tab))
+    return an.analisar_servico(next(s for s in servicos if s["item"] == item))["expandidos"]
 
 
 def test_parametro_do_concreto_de_caminhao_reanalisa_e_vira_padrao(tmp_path, arquivo_teste, biblioteca):
     banco = Banco(str(tmp_path / "c.sqlite3"))
     obra = preparar_obra(banco, arquivo_teste, biblioteca)
     est = etapa4.analisar_obra(banco, obra, biblioteca)
-    assert est["parametros"]["concreto_caminhao_m3"] == 3
+    assert est["parametros"]["concreto_caminhao_m3"] == 5   # ajuste 7.2: era 3
     antes = _horas_ativ(est, "PEX-02")
     assert etapa4.salvar_parametros(banco, obra, {"concreto_caminhao_m3": 200}) is True
     est = etapa4.analisar_obra(banco, obra, biblioteca)

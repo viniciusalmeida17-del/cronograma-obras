@@ -56,11 +56,13 @@
         <label>Rendimento (%) <input type="number" name="rendimento" min="30" max="150" step="1">
           <small>Horas ajustadas = horas da tabela ÷ rendimento. 90% = 11% a mais de horas.</small>
         </label>
-        <label>Concreto: m³ por caminhão <input type="number" name="volume_caminhao" min="0.5" max="100" step="0.5">
-          <small>Atividades de concretagem (FUN-04, EST-02, QUA-02) duram no mínimo volume ÷ (m³ por caminhão × caminhões por dia).</small></label>
-        <label>Caminhões de concreto por dia <input type="number" name="caminhoes_dia" min="1" max="100" step="1"></label>
-        <label>Concreto de caminhão a partir de (m³ por serviço) <input type="number" name="concreto_caminhao_m3" min="0.1" step="0.5">
-          <small>Serviço com USINADO ou BOMBEADO na descrição, ou com este volume ou mais: a produção do concreto (betoneira, usinado) fica sem horas; ficam lançamento, adensamento e acabamento. O valor fica como padrão das próximas obras.</small></label>
+        <label>Volume por caminhão (m³) <input type="number" name="volume_caminhao" min="0.5" max="100" step="any">
+          <small>O caminhão tem no mínimo 5 m³ e chega a 10 m³; em concretagem grande a média é 8 m³ (padrão). Fora de 5 a 10 m³ o valor é aceito, com aviso. Só é usado se houver limite de caminhões por dia.</small></label>
+        <label>Caminhões de concreto por dia <input type="number" name="caminhoes_dia" min="1" max="100" step="1" placeholder="sem limite">
+          <small>Vazio (padrão) = sem limite: a concretagem fica limitada pela equipe de lançamento (horas de mão de obra). Digite um máximo se a usina for longe ou a rua estreita: aí as concretagens (FUN-04, EST-02, QUA-02) duram no mínimo volume ÷ (m³ por caminhão × caminhões por dia).</small></label>
+        <label>Concreto de caminhão a partir de (m³ por serviço) <input type="number" name="concreto_caminhao_m3" min="0.1" step="any">
+          <small>Padrão 5 m³, o caminhão mínimo; abaixo disso o concreto é feito em betoneira na obra. Serviço com USINADO ou BOMBEADO na descrição, ou com este volume ou mais: a produção do concreto fica sem horas; ficam lançamento, adensamento e acabamento. O valor fica como padrão das próximas obras.</small></label>
+        <p id="avisos-parametros" class="largo aviso-sem-estimativa" hidden></p>
         <div class="info-parametros">
           <div><span class="discreto">Horas por dia</span> <b id="horas-dia"></b></div>
           <div><span class="discreto">Prazo da licitação</span> <b id="prazo-licitacao"></b></div>
@@ -107,6 +109,14 @@
     <!-- 4. Resumo -->
     <section class="aba" id="aba-resumo" hidden>
       <div class="cartao" id="cartao-pendencias"></div>
+      <div class="cartao" id="cartao-estimadas">
+        <h2>Horas estimadas para conferir</h2>
+        <p class="discreto">Subcomposições (ou serviços inteiros) sem composição no arquivo, no banco de coeficientes nem na referência (pelo código ou pela descrição):
+          as horas saem do custo (razão horas/custo dos serviços completos). É o último recurso: o custo de material vira hora de gente.
+          Digite as horas por unidade para trocar a estimativa por um valor real (vai para o banco de coeficientes).</p>
+        <p id="resumo-estimadas"></p>
+        <div class="rolagem"><table class="simples" id="tabela-estimadas"></table></div>
+      </div>
       <div class="cartao">
         <h2>Equipe indireta</h2>
         <div class="grade-duas">

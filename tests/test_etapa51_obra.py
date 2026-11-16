@@ -105,8 +105,11 @@ def test_referencia_chapisco_na_5_1_14(analise_por_item):
     for h in a["horas"]:
         if h["origem"] == "referencia":
             horas_ref[h["funcao"]] = horas_ref.get(h["funcao"], 0) + h["horas_un"]
-    # chapisco: Pedreiro 0,1394 h/m² × 5,26 m²/m (a laje pré-moldada 101963 também vem da referência)
-    assert horas_ref["Pedreiro"] == pytest.approx(0.1394 * 5.26, abs=1e-4)
+    # chapisco: Pedreiro 0,1394 h/m² × 5,26 m²/m (a laje pré-moldada 101963 também vem da referência);
+    # ajuste 7.2: a junta de dilatação 98575 (Pedreiro 1,3276 h/m) também está na aba Referencias
+    junta = [e for e in a["expandidos"] if e.get("referencia") and str(e["codigo"]) == "98575"]
+    assert junta and junta[0]["horas_un"] == pytest.approx((1.3276 + 0.2687) * junta[0]["coeficiente"], abs=1e-4)
+    assert horas_ref["Pedreiro"] == pytest.approx(0.1394 * 5.26 + 1.3276 * junta[0]["coeficiente"], abs=1e-4)
     assert horas_ref["Servente"] >= 0.0465 * 5.26
 
 
@@ -148,12 +151,16 @@ def test_concretagem_na_obra(obra51, biblioteca):
     banco, obra = obra51
     fun04 = _ativ(etapa4.estado_mao_de_obra(banco, obra, biblioteca), "FUN-04")
     assert fun04["tipo_producao"] == "concretagem" and fun04["volume_m3"] > 0
-    assert fun04["dias_concretagem"] == math.ceil(round(fun04["volume_m3"] / 24, 6))
+    # ajuste 7.2: caminhões por dia vazio (padrão) = sem limite; a duração vem da mão de obra
+    assert fun04["dias_concretagem"] is None and fun04["calculo"]["limitante"] != "concretagem"
+    etapa4.salvar_parametros(banco, obra, {"caminhoes_dia": 3})
+    fun04a = _ativ(etapa4.estado_mao_de_obra(banco, obra, biblioteca), "FUN-04")
+    assert fun04a["dias_concretagem"] == math.ceil(round(fun04["volume_m3"] / 24, 6))
     etapa4.salvar_parametros(banco, obra, {"volume_caminhao": 5, "caminhoes_dia": 1})
     fun04b = _ativ(etapa4.estado_mao_de_obra(banco, obra, biblioteca), "FUN-04")
     assert fun04b["dias_concretagem"] == math.ceil(round(fun04["volume_m3"] / 5, 6))
     assert fun04b["duracao"]["dias"] >= fun04b["dias_concretagem"]
-    etapa4.salvar_parametros(banco, obra, {"volume_caminhao": 8, "caminhoes_dia": 3})
+    etapa4.salvar_parametros(banco, obra, {"volume_caminhao": 8, "caminhoes_dia": ""})
 
 
 def test_producao_por_dia_de_terceirizada(tmp_path, arquivo_teste, biblioteca):
@@ -268,7 +275,10 @@ def test_importar_sinapi_e_reprocessar(tmp_path, arquivo_teste, biblioteca):
     banco = Banco(str(tmp_path / "s.sqlite3"))
     obra = preparar_obra(banco, arquivo_teste, biblioteca)
     est = etapa4.analisar_obra(banco, obra, biblioteca)
-    assert "98577" in {str(p["codigo"]) for p in _serv(est, "15.2.2")["pendentes"]}
+    # ajuste 7.2: a junta 98577 vem da referência pelo código; o SINAPI importado (banco) passa na frente
+    antes = _serv(est, "15.2.2")
+    assert "98577" not in {str(p["codigo"]) for p in antes["pendentes"]}
+    assert any(h["origem"] == "referencia" for h in antes["horas"])
     res = etapa4.importar_sinapi(banco, str(_sinapi(tmp_path / "sinapi.xlsx")), biblioteca=biblioteca)
     assert not res["precisa_mapeamento"] and res["linha_cabecalho"] == 4
     assert res["composicoes_com_mao_de_obra"] == 3 and res["obras_reprocessadas"] == [obra]

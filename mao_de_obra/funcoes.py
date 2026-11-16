@@ -244,3 +244,124 @@ def carregar_referencias(funcoes: TabelaFuncoes, caminho: str | os.PathLike | No
         res.setdefault(codigo, {})
         res[codigo][regra.funcao] = res[codigo].get(regra.funcao, 0.0) + float(h)
     return res
+
+# --------------------------------------------------------------------------- referência pela descrição (ajuste 7.2)
+
+MATERIAL = "MATERIAL"   # mao_de_obra = MATERIAL com 0 h: a subcomposição é só material
+
+
+@dataclass
+class RegraDescricao:
+    """Uma regra da aba "Por descricao": todos os termos em qualquer parte da descrição + mesma unidade."""
+    ordem: int
+    termos: list[str]
+    unidade: str
+    horas: dict[str, float]          # função -> h/un (vazio = só material)
+    equivale_a: str | None
+    observacao: str | None
+    linha_excel: int
+    texto: str = ""                  # termos como estão na planilha (para mostrar)
+
+    def casa(self, descricao: Any, unidade: Any) -> bool:
+        if unidade_norm(unidade) != self.unidade:
+            return False
+        d = normalizar(descricao)
+        return bool(d) and all(t in d for t in self.termos)
+
+    @property
+    def material(self) -> bool:
+        return not any(h > 0 for h in self.horas.values())
+
+    def resumo(self) -> dict[str, Any]:
+        return {"ordem": self.ordem, "termos": self.texto, "unidade": self.unidade, "equivale_a": self.equivale_a,
+                "material": self.material}
+
+
+def regra_por_descricao(regras: list[RegraDescricao], descricao: Any, unidade: Any) -> RegraDescricao | None:
+    """A primeira regra (pela ordem) que serve para a descrição e a unidade."""
+    for r in regras:
+        if r.casa(descricao, unidade):
+            return r
+    return None
+
+
+def carregar_referencias_descricao(funcoes: TabelaFuncoes,
+                                   caminho: str | os.PathLike | None = None) -> list[RegraDescricao]:
+    """Aba "Por descricao" da produtividade_referencia.xlsx. Linhas com a mesma ordem formam uma regra.
+
+    Valida: unidade preenchida, horas ≥ 0 e mão de obra reconhecida pela tabela de funções (ou MATERIAL).
+    Arquivo ou aba ausente = sem regras.
+    """
+    caminho = Path(caminho or os.environ.get("CRONOGRAMA_REFERENCIAS", CAMINHO_REFERENCIAS))
+    if not caminho.exists():
+        return []
+    wb = openpyxl.load_workbook(caminho, read_only=True, data_only=True)
+    try:
+        aba = next((n for n in wb.sheetnames if normalizar(n) == "POR DESCRICAO"), None)
+        linhas = list(wb[aba].iter_rows(values_only=True)) if aba else []
+    finally:
+        wb.close()
+    if not linhas:
+        return []
+    nome = f"{caminho.name}, aba Por descricao"
+    cab = {normalizar(v).lower(): i for i, v in enumerate(linhas[0]) if v is not None}
+    col = {
+        "ordem": cab.get("ordem"),
+        "termos": next((i for k, i in cab.items() if k.startswith("termos")), None),
+        "unidade": cab.get("unidade"),
+        "mo": next((i for k, i in cab.items() if k.startswith("mao_de_obra") or k.startswith("mao de obra")), None),
+        "horas": next((i for k, i in cab.items() if k.startswith("horas")), None),
+        "equivale": next((i for k, i in cab.items() if k.startswith("equivale")), None),
+        "obs": next((i for k, i in cab.items() if k.startswith("observ")), None),
+    }
+    faltando = [c for c in ("termos", "unidade", "mo", "horas") if col[c] is None]
+    if faltando:
+        raise ErroFuncoes([{"linha": 1, "mensagem": f"{nome}: colunas termos_na_descricao, unidade, mao_de_obra e "
+                                                     "horas_por_unidade não encontradas."}])
+    regras: dict[Any, RegraDescricao] = {}
+    erros: list[dict[str, Any]] = []
+    for n, l in enumerate(linhas[1:], start=2):
+        val = lambda c: l[col[c]] if col[c] is not None and col[c] < len(l) else None  # noqa: E731
+        termos_txt, mo, h_txt = val("termos"), val("mo"), val("horas")
+        if all(v is None or str(v).strip() == "" for v in (termos_txt, mo, h_txt, val("unidade"))):
+            continue
+        termos = [normalizar(t) for t in str(termos_txt or "").split("&") if normalizar(t)]
+        unidade = unidade_norm(val("unidade"))
+        h = para_numero(h_txt)
+        problemas = []
+        if not termos:
+            problemas.append("termos_na_descricao vazio")
+        if not unidade:
+            problemas.append("unidade vazia")
+        if h is None or h < 0:
+            problemas.append(f"horas_por_unidade inválida ('{'' if h_txt is None else h_txt}'): use um número ≥ 0")
+        funcao = None
+        if normalizar(mo) != MATERIAL:
+            regra_f = funcoes.identificar(mo)
+            if regra_f is None or regra_f.categoria == INDIRETA or regra_f.funcao == OPERADOR:
+                problemas.append(f"mão de obra '{mo or ''}' não reconhecida pela funcoes.xlsx (ou use MATERIAL)")
+            else:
+                funcao = regra_f.funcao
+        if problemas:
+            erros.append({"linha": n, "mensagem": f"{nome}: " + "; ".join(problemas) + "."})
+            continue
+        ordem = para_numero(val("ordem"))
+        chave = int(ordem) if ordem is not None else f"linha{n}"
+        r = regras.get(chave)
+        if r is None:
+            r = regras[chave] = RegraDescricao(int(ordem) if ordem is not None else 10**6 + n, termos, unidade, {},
+                                               None, None, n, " & ".join(t.strip() for t in str(termos_txt).split("&")))
+        elif r.termos != termos or r.unidade != unidade:
+            erros.append({"linha": n, "mensagem": f"{nome}: a ordem {chave} já tem outros termos ou outra unidade "
+                                                  f"(linha {r.linha_excel}); use uma ordem nova."})
+            continue
+        if funcao and h:
+            r.horas[funcao] = r.horas.get(funcao, 0.0) + float(h)
+        eq, obs = val("equivale"), val("obs")
+        if eq not in (None, "", "—", "-") and not r.equivale_a:
+            r.equivale_a = str(eq).strip()
+        if obs and not r.observacao:
+            r.observacao = str(obs).strip()
+    if erros:
+        raise ErroFuncoes(erros)
+    return sorted(regras.values(), key=lambda r: (r.ordem, r.linha_excel))

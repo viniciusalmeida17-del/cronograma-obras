@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS servicos (
     regra_usada           INTEGER,         -- número (ordem) da regra da biblioteca
     origem_horas          TEXT,            -- etapa 4: composicao, banco, estimado, manual, sem_mao_de_obra
     concreto              TEXT,            -- ajuste 7.1: JSON {caminhao: {volume_m3, motivo, horas_retiradas}} ou betoneira
+    por_descricao         TEXT,            -- ajuste 7.2: JSON [subcomposições pela referência pela descrição, com a regra]
     -- previstos para as próximas etapas
     etapa_obra            TEXT,
     local                 TEXT
@@ -147,7 +148,8 @@ COLUNAS_OBRA_ATIVIDADE = (
 )
 # Colunas acrescentadas depois da etapa 2 (migração de bancos antigos)
 MIGRACOES = {
-    "servicos": {"status_ligacao": "TEXT", "regra_usada": "INTEGER", "origem_horas": "TEXT", "concreto": "TEXT"},
+    "servicos": {"status_ligacao": "TEXT", "regra_usada": "INTEGER", "origem_horas": "TEXT", "concreto": "TEXT",
+                 "por_descricao": "TEXT"},
     "obras": {"arquivo_salvo": "TEXT", "composicoes_abas": "TEXT", "prazos_espera": "TEXT"},
     "atividade_resumo": {"maquinas": "TEXT"},
     "atividade_execucao": {"equipe_travada": "INTEGER", "producao_dia": "REAL", "maquinas_max": "INTEGER",

@@ -132,18 +132,22 @@ def test_horas_manuais_no_servico(banco, obra, biblioteca):
     # sobrevive a reler as composições
     s = _serv(etapa4.analisar_obra(banco, obra, biblioteca), "4.11")
     assert s["origem"] == "manual"
-    # vazio = volta ao automático
+    # vazio = volta ao automático (ajuste 7.2: o lançamento bombeado 40.16.02 vem da referência pela descrição)
     s = _serv(etapa4.definir_horas_servico(banco, obra, s["id"], {}, biblioteca), "4.11")
-    assert s["origem"] == "estimado"
+    assert s["origem"] == "composicao" and s["pendentes"] == []
+    assert {h["origem"] for h in s["horas"]} == {"referencia_descricao"}
 
 
 def test_horas_de_subcomposicao_pendente(banco, obra, biblioteca):
+    # ajuste 7.2: o ED-48202 sai da estimativa pela referência pela descrição; as horas digitadas (banco) vêm antes
     antes = _serv(etapa4.estado_mao_de_obra(banco, obra, biblioteca), "5.1.14")
-    assert "ED-48202" in {p["codigo"] for p in antes["pendentes"]}
+    assert "ED-48202" in {d["codigo"] for d in antes["por_descricao"]}
+    assert "ED-48202" not in {p["codigo"] for p in antes["pendentes"]}
     estado = etapa4.definir_horas_subcomposicao(banco, obra, "ED-48202", {"Pedreiro": 0.8, "Servente": 0.4},
                                                 "ALVENARIA ESTRUTURAL", biblioteca)
     depois = _serv(estado, "5.1.14")
     assert "ED-48202" not in {p["codigo"] for p in depois["pendentes"]}
+    assert "ED-48202" not in {d["codigo"] for d in depois["por_descricao"]}
     banco_h = {h["funcao"]: h["horas_un"] for h in depois["horas"] if h["origem"] == "banco"}
     coef = 6.52  # coeficiente do ED-48202 na composição do 5.1.14
     assert banco_h == {"Pedreiro": pytest.approx(0.8 * coef), "Servente": pytest.approx(0.4 * coef)}

@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS obra_parametros (
     rendimento            REAL NOT NULL DEFAULT 0.9,
     mudancas_jornada      TEXT,               -- JSON: [{"a_partir_de": "AAAA-MM-DD", "horas_semana": 42}]
     volume_caminhao       REAL,               -- etapa 5.1: m³ por caminhão de concreto (padrão 8)
-    caminhoes_dia         REAL,               -- etapa 5.1: caminhões de concreto por dia (padrão 3)
+    caminhoes_dia         REAL,               -- etapa 5.1: caminhões de concreto por dia (7.2: NULL = sem limite)
     juntar                TEXT,               -- etapa 5.1: JSON funcao -> destino; NULL = padrão da funcoes.xlsx
     concreto_caminhao_m3  REAL                -- ajuste 7.1: concreto de caminhão a partir de (m³ por serviço)
 );
@@ -128,8 +128,8 @@ CREATE TABLE IF NOT EXISTS banco_coeficientes (
 """
 
 PARAMETROS_PADRAO = {"horas_semana": 44.0, "dias_semana": 5, "rendimento": 0.9, "mudancas_jornada": [],
-                     "volume_caminhao": 8.0, "caminhoes_dia": 3.0, "juntar": None,
-                     "concreto_caminhao_m3": 3.0}
+                     "volume_caminhao": 8.0, "caminhoes_dia": None, "juntar": None,
+                     "concreto_caminhao_m3": 5.0}   # ajuste 7.2: 5 m³ (o caminhão mínimo) e caminhões por dia sem limite
 
 
 def chave(texto: Any) -> str:
@@ -241,8 +241,10 @@ class MaoDeObraMixin:
             for sid, a in analises.items():
                 concreto = ({"caminhao": a["concreto_caminhao"]} if a.get("concreto_caminhao") else
                             {"betoneira": a["concreto_betoneira"]} if a.get("concreto_betoneira") else None)
-                con.execute("UPDATE servicos SET origem_horas = ?, concreto = ? WHERE id = ?",
-                            (a["origem"], json.dumps(concreto, ensure_ascii=False) if concreto else None, sid))
+                con.execute("UPDATE servicos SET origem_horas = ?, concreto = ?, por_descricao = ? WHERE id = ?",
+                            (a["origem"], json.dumps(concreto, ensure_ascii=False) if concreto else None,
+                             json.dumps(a.get("por_descricao"), ensure_ascii=False) if a.get("por_descricao") else None,
+                             sid))
                 con.executemany(
                     "INSERT OR REPLACE INTO servico_mao_de_obra (servico_id, funcao, horas_un, origem) VALUES (?,?,?,?)",
                     [(sid, h["funcao"], h["horas_un"], h["origem"]) for h in a["horas"] if h["origem"] != "manual"],
@@ -277,11 +279,13 @@ class MaoDeObraMixin:
     def carregar_analises(self, obra_id: int) -> dict[int, dict[str, Any]]:
         """Análises gravadas (sem as estimadas). Vazio se a obra ainda não foi analisada."""
         with closing(self._conectar()) as con:
-            servicos = con.execute("SELECT id, origem_horas, concreto FROM servicos WHERE obra_id = ?", (obra_id,)).fetchall()
+            servicos = con.execute("SELECT id, origem_horas, concreto, por_descricao FROM servicos WHERE obra_id = ?",
+                                   (obra_id,)).fetchall()
             if not any(s["origem_horas"] for s in servicos):
                 return {}
             res = {s["id"]: {"origem": s["origem_horas"], "horas": [], "equipamentos": {}, "pendentes": [], "indireta": {},
-                             "concreto_caminhao": (json.loads(s["concreto"]) if s["concreto"] else {}).get("caminhao")}
+                             "concreto_caminhao": (json.loads(s["concreto"]) if s["concreto"] else {}).get("caminhao"),
+                             "por_descricao": json.loads(s["por_descricao"]) if s["por_descricao"] else []}
                    for s in servicos}
             filtro = "servico_id IN (SELECT id FROM servicos WHERE obra_id = ?)"
             for r in con.execute(f"SELECT * FROM servico_mao_de_obra WHERE {filtro} AND origem != 'estimado'", (obra_id,)):
